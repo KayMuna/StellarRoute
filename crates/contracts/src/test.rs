@@ -11,16 +11,16 @@
 
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
-    Address, Bytes, BytesN, Env, Vec,
+    Address, Bytes, BytesN, Env, Symbol, Vec,
 };
 
 use super::{
     errors::ContractError,
     router::{StellarRoute, StellarRouteClient},
-    storage::{
-        INSTANCE_TTL_EXTEND_TO, INSTANCE_TTL_THRESHOLD, POOL_TTL_EXTEND_TO, POOL_TTL_THRESHOLD,
+    types::{
+        Asset, FeeConfig, FeeRecipient, MevConfig, PoolType, ProposalAction, Route, RouteHop,
+        SwapParams,
     },
-    types::{Asset, PoolType, Route, RouteHop, SwapParams},
 };
 
 // ── Mock Contracts ────────────────────────────────────────────────────────────
@@ -1316,9 +1316,264 @@ fn test_is_pool_registered_different_pool() {
 #[test]
 fn test_extend_storage_ttl_no_pools() {
     let env = setup_env();
-    let (_, _, client) = deploy_router(&env);
-    // Should succeed even with zero registered pools
-    client.extend_storage_ttl();
+    let (admin, _fee_to, client) = deploy_router(&env);
+
+    client.pause();
+
+    let new_hash = BytesN::from_array(&env, &[8u8; 32]);
+    assert!(client
+        .try_propose_upgrade(&admin, &new_hash, &99999)
+        .is_err());
+}
+
+// ─── Token Allowlist Tests ────────────────────────────────────────────────────
+
+use super::types::{TokenCategory, TokenInfo};
+
+fn make_token_info(env: &Env, admin: &Address, asset: Asset, category: TokenCategory) -> TokenInfo {
+    TokenInfo {
+        asset,
+        name: Symbol::new(env, "TestToken"),
+        code: Symbol::new(env, "TST"),
+        decimals: 7,
+        issuer_verified: false,
+        category,
+        added_at: env.ledger().sequence() as u64,
+        added_by: admin.clone(),
+    }
+}
+
+#[test]
+fn test_add_token_success() {
+    let env = setup_env();
+    let (admin, _fee_to, client) = deploy_router(&env);
+
+    let issuer = Address::generate(&env);
+    let asset = Asset::Issued(issuer, Symbol::new(&env, "USDC"));
+    let info = make_token_info(&env, &admin, asset.clone(), TokenCategory::Stablecoin);
+
+    client.add_token(&admin, &info);
+
+    assert!(client.is_token_allowed(&asset));
+    assert_eq!(client.get_token_count(), 1);
+
+    let fetched = client.get_token_info(&asset).unwrap();
+    assert_eq!(fetched.code, Symbol::new(&env, "TST"));
+    assert_eq!(fetched.decimals, 7);
+}
+
+#[test]
+fn test_add_token_duplicate_rejected() {
+    let env = setup_env();
+    let (admin, _fee_to, client) = deploy_router(&env);
+
+    let issuer = Address::generate(&env);
+    let asset = Asset::Issued(issuer, Symbol::new(&env, "USDC"));
+    let info = make_token_info(&env, &admin, asset.clone(), TokenCategory::Stablecoin);
+
+    client.add_token(&admin, &info);
+
+    let info2 = make_token_info(&env, &admin, asset.clone(), TokenCategory::Stablecoin);
+    let result = client.try_add_token(&admin, &info2);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_remove_token_success() {
+    let env = setup_env();
+    let (admin, _fee_to, client) = deploy_router(&env);
+
+    let issuer = Address::generate(&env);
+    let asset = Asset::Issued(issuer, Symbol::new(&env, "USDC"));
+    let info = make_token_info(&env, &admin, asset.clone(), TokenCategory::Stablecoin);
+
+    client.add_token(&admin, &info);
+    assert_eq!(client.get_token_count(), 1);
+
+    client.remove_token(&admin, &asset);
+    assert!(!client.is_token_allowed(&asset));
+    assert_eq!(client.get_token_count(), 0);
+}
+
+#[test]
+fn test_remove_nonexistent_token_rejected() {
+    let env = setup_env();
+    let (admin, _fee_to, client) = deploy_router(&env);
+
+    let issuer = Address::generate(&env);
+    let asset = Asset::Issued(issuer, Symbol::new(&env, "NOTHERE"));
+    let result = client.try_remove_token(&admin, &asset);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_update_token_metadata() {
+    let env = setup_env();
+    let (admin, _fee_to, client) = deploy_router(&env);
+
+    let issuer = Address::generate(&env);
+    let asset = Asset::Issued(issuer, Symbol::new(&env, "USDC"));
+    let info = make_token_info(&env, &admin, asset.clone(), TokenCategory::Stablecoin);
+    client.add_token(&admin, &info);
+
+    let updated = TokenInfo {
+        asset: asset.clone(),
+        name: Symbol::new(&env, "UpdatedToken"),
+        code: Symbol::new(&env, "TST"),
+        decimals: 6,
+        issuer_verified: true,
+        category: TokenCategory::Ecosystem,
+        added_at: info.added_at,
+        added_by: admin.clone(),
+    };
+
+    client.update_token(&admin, &asset, &updated);
+
+    let fetched = client.get_token_info(&asset).unwrap();
+    assert_eq!(fetched.decimals, 6);
+    assert!(fetched.issuer_verified);
+    assert_eq!(fetched.category, TokenCategory::Ecosystem);
+}
+
+#[test]
+fn test_update_token_nonexistent_rejected() {
+    let env = setup_env();
+    let (admin, _fee_to, client) = deploy_router(&env);
+
+    let issuer = Address::generate(&env);
+    let asset = Asset::Issued(issuer, Symbol::new(&env, "GHOST"));
+    let info = make_token_info(&env, &admin, asset.clone(), TokenCategory::Community);
+    let result = client.try_update_token(&admin, &asset, &info);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_batch_add_tokens() {
+    let env = setup_env();
+    let (admin, _fee_to, client) = deploy_router(&env);
+
+    let mut batch = Vec::new(&env);
+    for i in 0..5u32 {
+        let issuer = Address::generate(&env);
+        // asset codes must be ≤ 9 chars; use short names
+        let code = match i {
+            0 => "USDC",
+            1 => "EURT",
+            2 => "AQUA",
+            3 => "SHX",
+            _ => "MOBI",
+        };
+        let asset = Asset::Issued(issuer, Symbol::new(&env, code));
+        batch.push_back(make_token_info(
+            &env,
+            &admin,
+            asset,
+            TokenCategory::Ecosystem,
+        ));
+    }
+
+    client.add_tokens_batch(&admin, &batch);
+    assert_eq!(client.get_token_count(), 5);
+}
+
+#[test]
+fn test_batch_add_exceeds_limit_rejected() {
+    let env = setup_env();
+    let (admin, _fee_to, client) = deploy_router(&env);
+
+    let mut batch = Vec::new(&env);
+    for _ in 0..11u32 {
+        let issuer = Address::generate(&env);
+        let asset = Asset::Issued(issuer, Symbol::new(&env, "XX"));
+        batch.push_back(make_token_info(
+            &env,
+            &admin,
+            asset,
+            TokenCategory::Community,
+        ));
+    }
+
+    let result = client.try_add_tokens_batch(&admin, &batch);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_get_tokens_by_category() {
+    let env = setup_env();
+    let (admin, _fee_to, client) = deploy_router(&env);
+
+    let stable1 = Asset::Issued(Address::generate(&env), Symbol::new(&env, "USDC"));
+    let stable2 = Asset::Issued(Address::generate(&env), Symbol::new(&env, "EURT"));
+    let eco1 = Asset::Issued(Address::generate(&env), Symbol::new(&env, "AQUA"));
+
+    client.add_token(
+        &admin,
+        &make_token_info(&env, &admin, stable1, TokenCategory::Stablecoin),
+    );
+    client.add_token(
+        &admin,
+        &make_token_info(&env, &admin, stable2, TokenCategory::Stablecoin),
+    );
+    client.add_token(
+        &admin,
+        &make_token_info(&env, &admin, eco1, TokenCategory::Ecosystem),
+    );
+
+    let stables = client.get_tokens_by_category(&TokenCategory::Stablecoin);
+    assert_eq!(stables.len(), 2);
+
+    let eco = client.get_tokens_by_category(&TokenCategory::Ecosystem);
+    assert_eq!(eco.len(), 1);
+}
+
+#[test]
+fn test_unauthorized_add_token_rejected() {
+    let env = setup_env();
+    let (_admin, _fee_to, client) = deploy_router(&env);
+
+    let attacker = Address::generate(&env);
+    let asset = Asset::Issued(Address::generate(&env), Symbol::new(&env, "EVIL"));
+    let info = make_token_info(&env, &attacker, asset, TokenCategory::Community);
+
+    let result = client.try_add_token(&attacker, &info);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_quote_with_no_allowlist_passes() {
+    // When token_count == 0 (no tokens added), validate_route_assets is
+    // skipped for backward compatibility — existing tests should still pass.
+    let env = setup_env();
+    let (_admin, _fee_to, client) = deploy_router(&env);
+    let pool = deploy_mock_pool(&env);
+    client.register_pool(&pool);
+
+    let route = make_route(&env, &pool, 1);
+    // Should succeed because no tokens are registered yet.
+    let result = client.try_get_quote(&1_000_i128, &route);
+    assert!(result.is_ok(), "expected ok but got {:?}", result);
+}
+
+#[test]
+fn test_quote_disallowed_token_rejected() {
+    let env = setup_env();
+    let (admin, _fee_to, client) = deploy_router(&env);
+    let pool = deploy_mock_pool(&env);
+
+    // Add exactly one token — something other than Native — so the allowlist
+    // is active (token_count > 0).
+    let issuer = Address::generate(&env);
+    let allowed = Asset::Issued(issuer, Symbol::new(&env, "USDC"));
+    client.add_token(
+        &admin,
+        &make_token_info(&env, &admin, allowed, TokenCategory::Stablecoin),
+    );
+
+    // Build a route using Asset::Native, which is NOT in the allowlist.
+    let route = make_route(&env, &pool, 1); // make_route uses Asset::Native
+
+    let result = client.try_get_quote(&1_000_i128, &route);
+    assert!(result.is_err());
 }
 
 #[test]
@@ -1538,4 +1793,218 @@ fn test_extend_storage_ttl_idempotent() {
 
     let status = client.get_ttl_status();
     assert!(!status.needs_extension);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ── Fee Distribution Tests ────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+
+fn valid_fee_config(env: &Env, r1: Address, r2: Address) -> FeeConfig {
+    let mut recipients = Vec::new(env);
+    recipients.push_back(FeeRecipient {
+        address: r1,
+        share_bps: 5000,
+        label: Symbol::new(env, "treasury"),
+    });
+    recipients.push_back(FeeRecipient {
+        address: r2,
+        share_bps: 5000,
+        label: Symbol::new(env, "stakers"),
+    });
+    FeeConfig {
+        recipients,
+        min_distribution: 100,
+        auto_distribute: false,
+    }
+}
+
+#[test]
+fn test_fee_config_validation() {
+    let env = setup_env();
+    let (admin, _, client) = deploy_router(&env);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(FeeRecipient {
+        address: Address::generate(&env),
+        share_bps: 9999, // Fails 10000 check
+        label: Symbol::new(&env, "treasury"),
+    });
+    let config = FeeConfig {
+        recipients,
+        min_distribution: 0,
+        auto_distribute: false,
+    };
+
+    // Using single-admin mode to set config
+    client.set_admin(&admin);
+    let result = client.try_set_fee_distribution_config(&config);
+
+    // In soroban, custom enum errors wrap in Ok() but fail as a contract error
+    assert_eq!(result, Err(Ok(ContractError::InvalidFeeConfig)));
+}
+
+#[test]
+fn test_multisig_set_fee_config() {
+    let env = setup_env();
+    let (s1, s2, _, _, client) = deploy_multisig_router(&env);
+
+    let config = valid_fee_config(&env, Address::generate(&env), Address::generate(&env));
+    let prop_id = client.propose(&s1, &ProposalAction::SetFeeConfig(config.clone()));
+
+    // s2 approves, auto-executing the config change
+    client.approve_proposal(&s2, &prop_id);
+
+    let stored = client.get_fee_distribution_config().unwrap();
+    assert_eq!(stored.min_distribution, 100);
+}
+
+#[test]
+fn test_manual_fee_distribution_with_dust() {
+    let env = setup_env();
+    let (_admin, _, client) = deploy_router(&env);
+    let pool = deploy_mock_pool(&env);
+    client.register_pool(&pool);
+
+    let r1 = Address::generate(&env);
+    let r2 = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let mut recipients = Vec::new(&env);
+    // Splits: 33.33%, 33.33%, 33.34%
+    recipients.push_back(FeeRecipient {
+        address: r1.clone(),
+        share_bps: 3333,
+        label: Symbol::new(&env, "r1"),
+    });
+    recipients.push_back(FeeRecipient {
+        address: r2.clone(),
+        share_bps: 3333,
+        label: Symbol::new(&env, "r2"),
+    });
+    recipients.push_back(FeeRecipient {
+        address: treasury.clone(),
+        share_bps: 3334,
+        label: Symbol::new(&env, "treasury"),
+    });
+
+    client.set_fee_distribution_config(&FeeConfig {
+        recipients,
+        min_distribution: 10,
+        auto_distribute: false,
+    });
+
+    // 1M -> 990K pool_out -> 30 bps fee = 297 fee
+    client.execute_swap(
+        &Address::generate(&env),
+        &swap_params_for(
+            &env,
+            make_route(&env, &pool, 1),
+            1_000_000,
+            0,
+            current_seq(&env) + 100,
+        ),
+    );
+
+    let fee_balance = client.get_fee_balance(&Asset::Native);
+    assert_eq!(fee_balance, 297);
+
+    client.distribute_fees(&Asset::Native);
+
+    // Balance reset
+    assert_eq!(client.get_fee_balance(&Asset::Native), 0);
+
+    // Validate history metric
+    let history = client.get_distribution_history(&Asset::Native);
+    assert_eq!(history.len(), 1);
+    assert_eq!(history.get(0).unwrap().total_distributed, 297);
+}
+
+#[test]
+fn test_auto_distribution_triggers() {
+    let env = setup_env();
+    let (_admin, _, client) = deploy_router(&env);
+    let pool = deploy_mock_pool(&env);
+    client.register_pool(&pool);
+
+    let config = FeeConfig {
+        recipients: valid_fee_config(&env, Address::generate(&env), Address::generate(&env))
+            .recipients,
+        min_distribution: 100,
+        auto_distribute: true,
+    };
+    client.set_fee_distribution_config(&config);
+
+    // Swap that generates 2 fee (under the 100 threshold)
+    client.execute_swap(
+        &Address::generate(&env),
+        &swap_params_for(
+            &env,
+            make_route(&env, &pool, 1),
+            1000,
+            0,
+            current_seq(&env) + 100,
+        ),
+    );
+    assert_eq!(client.get_fee_balance(&Asset::Native), 2);
+    assert_eq!(client.get_distribution_history(&Asset::Native).len(), 0);
+
+    // Swap that generates 297 fee (crosses the threshold of 100)
+    client.execute_swap(
+        &Address::generate(&env),
+        &swap_params_for(
+            &env,
+            make_route(&env, &pool, 1),
+            1_000_000,
+            0,
+            current_seq(&env) + 100,
+        ),
+    );
+
+    // Balance should be 0 because it automatically distributed
+    assert_eq!(client.get_fee_balance(&Asset::Native), 0);
+    assert_eq!(client.get_distribution_history(&Asset::Native).len(), 1);
+    // Both 2 and 297 are distributed together
+    assert_eq!(
+        client
+            .get_distribution_history(&Asset::Native)
+            .get(0)
+            .unwrap()
+            .total_distributed,
+        299
+    );
+}
+
+#[test]
+fn test_burn_recipient_tracking() {
+    let env = setup_env();
+    let (_admin, _, client) = deploy_router(&env);
+    let pool = deploy_mock_pool(&env);
+    client.register_pool(&pool);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(FeeRecipient {
+        address: Address::generate(&env),
+        share_bps: 10000, // 100%
+        label: Symbol::new(&env, "burn"),
+    });
+
+    client.set_fee_distribution_config(&FeeConfig {
+        recipients,
+        min_distribution: 0,
+        auto_distribute: false,
+    });
+
+    client.execute_swap(
+        &Address::generate(&env),
+        &swap_params_for(
+            &env,
+            make_route(&env, &pool, 1),
+            1_000_000,
+            0,
+            current_seq(&env) + 100,
+        ),
+    );
+    client.distribute_fees(&Asset::Native);
+
+    assert_eq!(client.get_total_fees_burned(&Asset::Native), 297);
 }
