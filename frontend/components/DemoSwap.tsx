@@ -20,17 +20,17 @@ import { usePairs, useQuote } from "@/hooks/useApi";
 import { useQuoteRefresh } from "@/hooks/useQuoteRefresh";
 import { useTransactionHistory } from "@/hooks/useTransactionHistory";
 import { useWallet } from "@/components/providers/wallet-provider";
+import { useSettings } from "@/components/providers/settings-provider";
 
 import type { PathStep, TradingPair } from "@/types";
 import { TransactionStatus } from "@/types/transaction";
-import { QUOTE_AUTO_REFRESH_INTERVAL_MS } from "@/lib/quote-stale";
 import {
   formatMaxAmountForInput,
   maxDecimalsForSellAsset,
   parseSellAmount,
 } from "@/lib/amount-input";
-
 import { QUOTE_AUTO_REFRESH_INTERVAL_MS } from "@/lib/quote-stale";
+import { TradeRouteDisplay } from "@/components/shared/TradeRouteDisplay";
 
 const MOCK_WALLET = "GBSU...XYZ9";
 
@@ -111,19 +111,6 @@ export function DemoSwap() {
 
   const refreshDisabled = quoteLoading || manualRefreshCoolingDown || !numericForQuote;
 
-  const {
-    refresh,
-    refreshDisabled,
-    autoRefreshEnabled,
-    setAutoRefreshEnabled,
-  } = useQuoteRefresh({
-    baseAsset: quoteBase,
-    counterAsset: quoteCounter,
-    amount: numericForQuote,
-    side: "sell",
-    enabled: Boolean(selectedPair && numericForQuote !== undefined),
-  });
-
   const amountInputInvalid =
     sellRaw.trim() !== "" &&
     parseResult.status !== "ok" &&
@@ -138,11 +125,6 @@ export function DemoSwap() {
     setSellRaw(formatMaxAmountForInput(stubSpendableBalance, sellMaxDecimals));
   }, [isConnected, stubSpendableBalance, sellMaxDecimals]);
 
-<<<<<<< HEAD
-=======
-
-
->>>>>>> 3dd66dcbab93f5d07cae58afda851a9fdc7ebb35
   const handleSwapClick = () => {
     if (parseResult.status !== "ok" || !selectedPair) {
       toast.error("Enter a valid sell amount and select a pair.");
@@ -444,6 +426,14 @@ export function DemoSwap() {
             )}
           </div>
         </div>
+        
+        {numericForQuote && (
+          <TradeRouteDisplay 
+            quote={quote || null} 
+            isLoading={quoteLoading} 
+            error={quoteError?.message}
+          />
+        )}
 
         <div className="flex flex-wrap items-center gap-3">
           <Button
