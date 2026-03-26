@@ -18,7 +18,8 @@ export function SwapWithPairSelector() {
   const { base, quote, setPair, isInitializing } = useTokenPairUrl();
   const [amount, setAmount] = useState("");
 
-  const pairs = useMemo(() => pairsData?.pairs || [], [pairsData]);
+  // `usePairs()` returns `TradingPair[]` directly (not `{ pairs: ... }`)
+  const pairs = useMemo(() => pairsData ?? [], [pairsData]);
 
   // Auto-select first pair if none selected
   useEffect(() => {
@@ -60,10 +61,11 @@ export function SwapWithPairSelector() {
           <h3 className="text-lg font-semibold mb-4">Swap Amount</h3>
           <div className="space-y-4">
             <div>
-              <label className="text-sm font-medium mb-2 block">
+              <label htmlFor="pay-amount-input" className="text-sm font-medium mb-2 block">
                 You sell ({selectedPair.base})
               </label>
               <Input
+                id="pay-amount-input"
                 type="text"
                 inputMode="decimal"
                 placeholder="0.0"

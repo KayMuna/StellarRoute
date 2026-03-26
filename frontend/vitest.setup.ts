@@ -1,3 +1,4 @@
+import "@testing-library/jest-dom/vitest";
 import { vi } from "vitest";
 
 /** jsdom does not implement matchMedia; components using prefers-reduced-motion need this. */

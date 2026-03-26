@@ -30,7 +30,7 @@ pub struct VenueScorerInput {
     pub reserve_b_e7: Option<i128>,
     pub tvl_e7: Option<i128>,
     // Shared
-    pub last_updated_at: DateTime<Utc>,
+    pub last_updated_at: Option<DateTime<Utc>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -109,7 +109,10 @@ pub trait VenueScorer: Send + Sync {
 impl VenueScorer for SdexScorer {
     fn score(&self, input: &VenueScorerInput) -> HealthRecord {
         let now = Utc::now();
-        let staleness_secs = (now - input.last_updated_at).num_seconds().max(0) as u64;
+        let staleness_secs = input
+            .last_updated_at
+            .map(|last_updated_at| (now - last_updated_at).num_seconds().max(0) as u64)
+            .unwrap_or(u64::MAX);
 
         // Stale or missing bids/asks → 0.0
         if staleness_secs > self.staleness_threshold_secs
@@ -143,7 +146,8 @@ impl VenueScorer for SdexScorer {
         let depth = input.depth_top_n_e7.unwrap_or(0) as f64;
         let depth_score = (depth / self.target_depth_e7 as f64).clamp(0.0, 1.0);
 
-        let staleness_score = 1.0 - (staleness_secs as f64 / self.staleness_threshold_secs as f64);
+        let staleness_score: f64 =
+            1.0_f64 - (staleness_secs as f64 / self.staleness_threshold_secs as f64);
         let staleness_score = staleness_score.clamp(0.0, 1.0);
 
         let score =
@@ -166,7 +170,10 @@ impl VenueScorer for SdexScorer {
 impl VenueScorer for AmmScorer {
     fn score(&self, input: &VenueScorerInput) -> HealthRecord {
         let now = Utc::now();
-        let staleness_secs = (now - input.last_updated_at).num_seconds().max(0) as u64;
+        let staleness_secs = input
+            .last_updated_at
+            .map(|last_updated_at| (now - last_updated_at).num_seconds().max(0) as u64)
+            .unwrap_or(u64::MAX);
 
         let reserve_a = input.reserve_a_e7.unwrap_or(0);
         let reserve_b = input.reserve_b_e7.unwrap_or(0);
@@ -192,7 +199,8 @@ impl VenueScorer for AmmScorer {
         let tvl = input.tvl_e7.unwrap_or(0) as f64;
         let tvl_score = (tvl / self.min_tvl_threshold_e7 as f64).clamp(0.0, 1.0);
 
-        let staleness_score = 1.0 - (staleness_secs as f64 / self.staleness_threshold_secs as f64);
+        let staleness_score: f64 =
+            1.0_f64 - (staleness_secs as f64 / self.staleness_threshold_secs as f64);
         let staleness_score = staleness_score.clamp(0.0, 1.0);
 
         let score =
@@ -213,6 +221,55 @@ impl VenueScorer for AmmScorer {
             }),
             computed_at: now,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FreshnessThresholds
+// ---------------------------------------------------------------------------
+
+fn default_sdex_freshness_secs() -> u64 {
+    30
+}
+
+fn default_amm_freshness_secs() -> u64 {
+    60
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+pub struct FreshnessThresholds {
+    #[serde(default = "default_sdex_freshness_secs")]
+    pub sdex: u64,
+    #[serde(default = "default_amm_freshness_secs")]
+    pub amm: u64,
+}
+
+impl Default for FreshnessThresholds {
+    fn default() -> Self {
+        Self {
+            sdex: default_sdex_freshness_secs(),
+            amm: default_amm_freshness_secs(),
+        }
+    }
+}
+
+impl FreshnessThresholds {
+    /// Validates that both thresholds are positive (> 0).
+    /// Returns an error string identifying the invalid field(s).
+    pub fn validate(&self) -> Result<(), String> {
+        if self.sdex == 0 {
+            return Err(
+                "freshness_threshold_secs.sdex must be a positive integer greater than zero"
+                    .to_string(),
+            );
+        }
+        if self.amm == 0 {
+            return Err(
+                "freshness_threshold_secs.amm must be a positive integer greater than zero"
+                    .to_string(),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -242,6 +299,8 @@ pub struct HealthScoringConfig {
     pub min_tvl_threshold_e7: i128,
     #[serde(default = "default_depth_levels")]
     pub depth_levels: usize,
+    #[serde(default)]
+    pub freshness_threshold_secs: FreshnessThresholds,
 }
 
 impl Default for HealthScoringConfig {
@@ -252,6 +311,7 @@ impl Default for HealthScoringConfig {
             staleness_threshold_secs: default_staleness_secs(),
             min_tvl_threshold_e7: default_min_tvl(),
             depth_levels: default_depth_levels(),
+            freshness_threshold_secs: FreshnessThresholds::default(),
         }
     }
 }
@@ -276,12 +336,12 @@ mod tests {
         }
     }
 
-    fn fresh_ts() -> DateTime<Utc> {
-        Utc::now()
+    fn fresh_ts() -> Option<DateTime<Utc>> {
+        Some(Utc::now())
     }
 
-    fn stale_ts() -> DateTime<Utc> {
-        Utc::now() - chrono::Duration::seconds(120)
+    fn stale_ts() -> Option<DateTime<Utc>> {
+        Some(Utc::now() - chrono::Duration::seconds(120))
     }
 
     // --- SdexScorer tests ---
@@ -525,5 +585,72 @@ mod tests {
             result.is_ok(),
             "unknown fields should be ignored during deserialization"
         );
+    }
+
+    // --- FreshnessThresholds tests (Requirements 5.2, 5.5) ---
+
+    #[test]
+    fn freshness_thresholds_defaults_when_absent() {
+        // When freshness_threshold_secs is absent from config, defaults apply
+        let config: HealthScoringConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            config.freshness_threshold_secs.sdex, 30,
+            "default SDEX freshness threshold should be 30s"
+        );
+        assert_eq!(
+            config.freshness_threshold_secs.amm, 60,
+            "default AMM freshness threshold should be 60s"
+        );
+    }
+
+    #[test]
+    fn freshness_thresholds_partial_defaults() {
+        // Only sdex specified — amm should default to 60
+        let config: HealthScoringConfig =
+            serde_json::from_str(r#"{"freshness_threshold_secs": {"sdex": 15}}"#).unwrap();
+        assert_eq!(config.freshness_threshold_secs.sdex, 15);
+        assert_eq!(config.freshness_threshold_secs.amm, 60);
+    }
+
+    #[test]
+    fn freshness_thresholds_explicit_values() {
+        let config: HealthScoringConfig =
+            serde_json::from_str(r#"{"freshness_threshold_secs": {"sdex": 10, "amm": 20}}"#)
+                .unwrap();
+        assert_eq!(config.freshness_threshold_secs.sdex, 10);
+        assert_eq!(config.freshness_threshold_secs.amm, 20);
+    }
+
+    #[test]
+    fn freshness_thresholds_zero_sdex_fails_validation() {
+        let thresholds = FreshnessThresholds { sdex: 0, amm: 60 };
+        let err = thresholds.validate().unwrap_err();
+        assert!(
+            err.contains("sdex"),
+            "error message should identify the sdex field: {err}"
+        );
+    }
+
+    #[test]
+    fn freshness_thresholds_zero_amm_fails_validation() {
+        let thresholds = FreshnessThresholds { sdex: 30, amm: 0 };
+        let err = thresholds.validate().unwrap_err();
+        assert!(
+            err.contains("amm"),
+            "error message should identify the amm field: {err}"
+        );
+    }
+
+    #[test]
+    fn freshness_thresholds_positive_values_pass_validation() {
+        let thresholds = FreshnessThresholds { sdex: 1, amm: 1 };
+        assert!(thresholds.validate().is_ok());
+    }
+
+    #[test]
+    fn health_scoring_config_default_populates_freshness() {
+        let config = HealthScoringConfig::default();
+        assert_eq!(config.freshness_threshold_secs.sdex, 30);
+        assert_eq!(config.freshness_threshold_secs.amm, 60);
     }
 }
