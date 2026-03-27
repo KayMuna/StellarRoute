@@ -21,6 +21,15 @@ pub struct QuoteParams {
     pub explain: Option<bool>,
 }
 
+/// Query parameters for the multiple-routes endpoint
+#[derive(Debug, Deserialize)]
+pub struct RoutesParams {
+    pub amount: Option<String>,
+    pub limit: Option<usize>,
+    pub max_hops: Option<usize>,
+    pub environment: Option<String>,
+}
+
 impl QuoteParams {
     /// Get the slippage tolerance in basis points, applying default if omitted
     pub fn slippage_bps(&self) -> u32 {
@@ -55,7 +64,7 @@ pub enum QuoteType {
 }
 
 /// Asset identifier in path parameters
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct AssetPath {
     /// Asset code (e.g., "XLM", "USDC", or "native" for XLM)
     pub asset_code: String,
