@@ -30,24 +30,7 @@ pub struct RoutesParams {
     pub environment: Option<String>,
 }
 
-impl QuoteParams {
-    /// Get the slippage tolerance in basis points, applying default if omitted
-    pub fn slippage_bps(&self) -> u32 {
-        self.slippage_bps.unwrap_or(DEFAULT_SLIPPAGE_BPS)
-    }
 
-    /// Validate the slippage tolerance bounds
-    pub fn validate_slippage(&self) -> std::result::Result<(), String> {
-        let bps = self.slippage_bps();
-        if bps > MAX_SLIPPAGE_BPS {
-            return Err(format!(
-                "slippage_bps must be between 0 and {} (100%)",
-                MAX_SLIPPAGE_BPS
-            ));
-        }
-        Ok(())
-    }
-}
 
 fn default_quote_type() -> QuoteType {
     QuoteType::Sell

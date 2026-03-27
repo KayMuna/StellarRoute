@@ -7,11 +7,11 @@ use tokio::sync::Mutex;
 
 use crate::cache::{CacheManager, SingleFlight};
 
-use crate::models::QuoteResponse;
-use crate::replay::capture::CaptureHook;
-
 use crate::models::{QuoteResponse, RoutesResponse};
+use crate::replay::capture::CaptureHook;
 use crate::graph::GraphManager;
+use crate::routes::ws::WsState;
+use stellarroute_routing::health::circuit_breaker::CircuitBreakerRegistry;
 
 use crate::worker::{JobQueue, RouteWorkerPool, WorkerPoolConfig};
 
@@ -107,7 +107,10 @@ pub struct AppState {
     pub routes_single_flight: Arc<SingleFlight<crate::error::Result<RoutesResponse>>>,
     /// Persistent background synced graph manager
     pub graph_manager: Arc<GraphManager>,
-
+    /// WebSocket shared state
+    pub ws: Option<Arc<WsState>>,
+    /// Shared circuit breaker registry for liquidity providers
+    pub circuit_breaker: Arc<CircuitBreakerRegistry>,
 }
 
 impl AppState {
@@ -129,16 +132,14 @@ impl AppState {
             cache_policy,
             cache_metrics: Arc::new(CacheMetrics::default()),
             worker_pool,
-
-            quote_single_flight: Arc::new(SingleFlight::new()),
-            replay_capture: None,
-
             quote_single_flight: Arc::new(
                 SingleFlight::<crate::error::Result<QuoteResponse>>::new(),
             ),
+            replay_capture: None,
             routes_single_flight: Arc::new(SingleFlight::new()),
             graph_manager,
-
+            ws: None,
+            circuit_breaker: Arc::new(CircuitBreakerRegistry::default()),
         }
     }
 
@@ -164,14 +165,14 @@ impl AppState {
             cache_policy,
             cache_metrics: Arc::new(CacheMetrics::default()),
             worker_pool,
-            quote_single_flight: Arc::new(SingleFlight::new()),
-            replay_capture: None,
             quote_single_flight: Arc::new(
                 SingleFlight::<crate::error::Result<QuoteResponse>>::new(),
             ),
+            replay_capture: None,
             routes_single_flight: Arc::new(SingleFlight::new()),
             graph_manager,
-
+            ws: None,
+            circuit_breaker: Arc::new(CircuitBreakerRegistry::default()),
         }
     }
 

@@ -38,6 +38,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 use tower::{Layer, Service};
+use dashmap::DashMap;
 use tracing::{debug, warn};
 
 use crate::models::{ApiErrorCode, ErrorResponse};
@@ -282,6 +283,7 @@ impl Backend {
 pub struct RateLimitLayer {
     backend: Backend,
     endpoint_config: Arc<EndpointConfig>,
+    tenant_overrides: Arc<DashMap<String, RateLimitConfig>>,
 }
 
 impl RateLimitLayer {
@@ -290,6 +292,7 @@ impl RateLimitLayer {
         Self {
             backend: Backend::Redis(Arc::new(Mutex::new(conn))),
             endpoint_config: Arc::new(endpoint_config),
+            tenant_overrides: Arc::new(DashMap::new()),
         }
     }
 
@@ -298,7 +301,14 @@ impl RateLimitLayer {
         Self {
             backend: Backend::InMemory(Arc::new(Mutex::new(InMemoryStore::default()))),
             endpoint_config: Arc::new(endpoint_config),
+            tenant_overrides: Arc::new(DashMap::new()),
         }
+    }
+
+    /// Add a tenant-specific rate limit override.
+    pub fn with_override(self, tenant_id: impl Into<String>, config: RateLimitConfig) -> Self {
+        self.tenant_overrides.insert(tenant_id.into(), config);
+        self
     }
 }
 
@@ -316,6 +326,7 @@ impl<S> Layer<S> for RateLimitLayer {
             inner,
             backend: self.backend.clone(),
             endpoint_config: self.endpoint_config.clone(),
+            tenant_overrides: self.tenant_overrides.clone(),
         }
     }
 }
@@ -326,6 +337,7 @@ pub struct RateLimitService<S> {
     inner: S,
     backend: Backend,
     endpoint_config: Arc<EndpointConfig>,
+    tenant_overrides: Arc<DashMap<String, RateLimitConfig>>,
 }
 
 impl<S> Service<Request> for RateLimitService<S>
@@ -350,17 +362,25 @@ where
         let mut inner = self.inner.clone();
         let backend = self.backend.clone();
         let endpoint_config = self.endpoint_config.clone();
+        let tenant_overrides = self.tenant_overrides.clone();
 
         Box::pin(async move {
             let path = req.uri().path().to_owned();
-            let ip = extract_ip(&req);
-            let config = endpoint_config.for_path(&path);
+            let identity = extract_identity(&req);
             let endpoint_slug = path_to_slug(&path);
-            let key = format!("rate_limit:{}:{}", endpoint_slug, ip);
+            
+            // Priority: 1. Tenant-specific override, 2. Endpoint-specific default
+            let config = if let Some(override_cfg) = tenant_overrides.get(&identity) {
+                override_cfg.clone()
+            } else {
+                endpoint_config.for_path(&path).clone()
+            };
+
+            let key = format!("rate_limit:{}:{}", endpoint_slug, identity);
 
             debug!("Rate limit check: key={}", key);
 
-            let info = backend.check(&key, config).await;
+            let info = backend.check(&key, &config).await;
 
             if info.denied {
                 debug!("Rate limit denied: key={}", key);
@@ -395,8 +415,27 @@ where
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Extract client identity from headers (X-API-Key or Bearer token), falling back to IP.
+fn extract_identity(req: &axum::http::Request<axum::body::Body>) -> String {
+    // 1. X-API-Key
+    if let Some(key) = req.headers().get("x-api-key").and_then(|v| v.to_str().ok()) {
+        return format!("key:{}", key);
+    }
+
+    // 2. Authorization Bearer
+    if let Some(auth) = req.headers().get("authorization").and_then(|v| v.to_str().ok()) {
+        if auth.to_lowercase().starts_with("bearer ") {
+            let token = &auth[7..];
+            return format!("token:{}", token);
+        }
+    }
+
+    // 3. Fallback to IP
+    format!("ip:{}", extract_ip(req))
+}
+
 /// Extract client IP from common forwarding headers, falling back to loopback.
-fn extract_ip(req: &Request<Body>) -> IpAddr {
+fn extract_ip(req: &axum::http::Request<axum::body::Body>) -> IpAddr {
     // X-Forwarded-For: client, proxy1, proxy2
     if let Some(fwd) = req
         .headers()
@@ -604,5 +643,35 @@ mod tests {
         let info = backend.check("over_key", &config).await;
         assert!(info.denied);
         assert_eq!(info.remaining, 0);
+    }
+
+    #[test]
+    fn test_extract_identity_api_key() {
+        use axum::http::Request;
+        let req = Request::builder()
+            .header("x-api-key", "test-key-123")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_identity(&req), "key:test-key-123");
+    }
+
+    #[test]
+    fn test_extract_identity_bearer() {
+        use axum::http::Request;
+        let req = Request::builder()
+            .header("authorization", "Bearer token-456")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_identity(&req), "token:token-456");
+    }
+
+    #[test]
+    fn test_extract_identity_fallback_ip() {
+        use axum::http::Request;
+        let req = Request::builder()
+            .header("x-real-ip", "1.2.3.4")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(extract_identity(&req), "ip:1.2.3.4");
     }
 }

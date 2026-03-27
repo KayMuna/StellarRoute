@@ -25,8 +25,8 @@ pub enum ApiError {
     #[error("Database error: {0}")]
     Database(Arc<sqlx::Error>),
 
-    #[error("Validation error: {code} - {message}")]
-    Validation { code: String, message: String },
+    #[error("Validation error: {0}")]
+    Validation(String),
 
     #[error("Rate limit exceeded")]
     RateLimitExceeded,
@@ -71,7 +71,11 @@ impl IntoResponse for ApiError {
         let (status, error_type, message) = match self {
             ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, "bad_request".to_string(), msg),
             ApiError::NotFound(msg) => (StatusCode::NOT_FOUND, "not_found".to_string(), msg),
-            ApiError::Validation { code, message } => (StatusCode::BAD_REQUEST, code, message),
+            ApiError::Validation(message) => (
+                StatusCode::BAD_REQUEST,
+                "validation_error".to_string(),
+                message,
+            ),
             ApiError::RateLimitExceeded => (
                 StatusCode::TOO_MANY_REQUESTS,
                 "rate_limit_exceeded".to_string(),
@@ -114,7 +118,21 @@ impl IntoResponse for ApiError {
             ),
         };
 
-        let body = Json(ErrorResponse::new(code, message));
+        let body = Json(ErrorResponse::new(
+            match error_type.as_str() {
+                "bad_request" => ApiErrorCode::BadRequest,
+                "not_found" => ApiErrorCode::NotFound,
+                "validation_error" => ApiErrorCode::ValidationError,
+                "rate_limit_exceeded" => ApiErrorCode::RateLimitExceeded,
+                "overloaded" => ApiErrorCode::Overloaded,
+                "unauthorized" => ApiErrorCode::Unauthorized,
+                "invalid_asset" => ApiErrorCode::InvalidAsset,
+                "no_route" => ApiErrorCode::NoRoute,
+                "stale_market_data" => ApiErrorCode::StaleMarketData,
+                _ => ApiErrorCode::InternalError,
+            },
+            message,
+        ));
         (status, body).into_response()
     }
 }
