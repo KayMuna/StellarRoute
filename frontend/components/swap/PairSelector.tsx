@@ -3,8 +3,8 @@
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ArrowDown } from "lucide-react";
-import { useSettings } from '@/components/providers/settings-provider';
-import { formatAmount } from '@/lib/formatting';
+import { useOptionalSettings } from '@/components/providers/settings-provider';
+import { formatAmount, getUserLocale } from '@/lib/formatting';
 
 interface PairSelectorProps {
   payAmount: string;
@@ -21,8 +21,8 @@ export function PairSelector({
   payBalance = 1000,
   receiveBalance = 0
 }: PairSelectorProps) {
-  const { settings } = useSettings();
-  const locale = settings.locale;
+  const settings = useOptionalSettings();
+  const locale = settings?.settings.locale ?? getUserLocale();
 
   const formattedPayBalance = formatAmount(payBalance, locale, 2);
   const formattedReceiveBalance = formatAmount(receiveBalance, locale, 2);
