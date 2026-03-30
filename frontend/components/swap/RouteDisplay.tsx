@@ -1,190 +1,102 @@
-'use client';
-
 import { Skeleton } from "@/components/ui/skeleton";
-import { ArrowRight, Info, ChevronDown, MapPin } from "lucide-react";
-import { useState, useMemo, useRef } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { ArrowRight, ArrowDown, Info, ChevronDown } from "lucide-react";
+import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { useFeatureFlag } from "@/hooks/useFeatureFlag";
 import { ConfidenceIndicator } from "./ConfidenceIndicator";
 import { RouteDisplaySkeleton } from "./RouteDisplaySkeleton";
-import { cn } from "@/lib/utils";
 
 interface RouteDisplayProps {
-  route: string[];
   amountOut: string;
+  /** Route confidence score (0-100) */
   confidenceScore?: number;
+  /** Market volatility level */
   volatility?: "high" | "medium" | "low";
+  /** Show loading skeleton */
   isLoading?: boolean;
 }
 
-// VIRTUALIZATION_THRESHOLD: The number of items beyond which the route details list is virtualized.
-const VIRTUALIZATION_THRESHOLD = 10;
-
 export function RouteDisplay({
-  route,
   amountOut,
   confidenceScore = 85,
   volatility = "low",
   isLoading = false,
 }: RouteDisplayProps) {
-  const routesBetaEnabled = useFeatureFlag("routesBeta");
   const [showDetails, setShowDetails] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-
-  const hops = useMemo(() => route.slice(0, -1), [route]);
-  const isVirtualized = hops.length >= VIRTUALIZATION_THRESHOLD;
-
-  const rowVirtualizer = useVirtualizer({
-    count: hops.length,
-    getScrollElement: () => scrollRef.current,
-    estimateSize: () => 40, // height of a hop item + margin/padding approx
-    overscan: 3,
-  });
-
-  if (!routesBetaEnabled) {
-    return null;
-  }
 
   if (isLoading) {
     return <RouteDisplaySkeleton />;
   }
 
-  if (!route || route.length < 2) {
-    return null;
-  }
-
   return (
-    <div className="rounded-2xl border border-border/40 bg-background/40 backdrop-blur-sm p-4 space-y-4 transition-all duration-300 hover:border-primary/20 hover:shadow-md group">
+    <div className="rounded-xl border border-border/50 p-4 space-y-4 transition-all duration-200 hover:border-border hover:shadow-sm focus-within:ring-2 focus-within:ring-primary/20">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-lg bg-primary/10 text-primary">
-            <MapPin className="h-3.5 w-3.5" />
-          </div>
-          <h4 className="text-sm font-semibold tracking-tight text-foreground/90">Optimal Route</h4>
+          <h4 className="text-sm font-medium">Best Route</h4>
+          <Info className="h-4 w-4 text-muted-foreground cursor-help" />
         </div>
         <div className="flex items-center gap-2">
           <ConfidenceIndicator score={confidenceScore} volatility={volatility} />
-          <Badge variant="secondary" className="text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 border-emerald-500/20 px-1.5 h-5 transition-colors">
-            Best Price
+          <Badge
+            variant="secondary"
+            className="border-success/20 bg-success/10 text-xs text-success transition-colors hover:bg-success/15"
+          >
+            Optimal
           </Badge>
+          {/* Task 5.3: "Show route details" toggle as <button> with 44×44px touch target */}
           <button
             type="button"
             onClick={() => setShowDetails((prev) => !prev)}
             aria-expanded={showDetails}
-            className="h-8 w-8 flex items-center justify-center rounded-full hover:bg-muted/80 transition-all active:scale-90"
+            aria-label="Show route details"
+            className="min-h-[44px] min-w-[44px] flex items-center justify-center rounded-md transition-all duration-150 hover:bg-muted/50 focus-visible:bg-muted/50 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 active:scale-95"
           >
             <ChevronDown
-              className={cn(
-                "h-4 w-4 text-muted-foreground transition-transform duration-300",
-                showDetails ? "rotate-180" : ""
-              )}
+              className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${showDetails ? "rotate-180" : ""}`}
             />
           </button>
         </div>
       </div>
 
-      <div className="relative flex items-center justify-between px-2 py-3 bg-muted/30 rounded-xl border border-border/20">
-        {route.map((token, index) => (
-          <div key={`route-${index}-${token}`} className="flex items-center gap-2 flex-1 justify-center first:justify-start last:justify-end">
-            <div className="flex flex-col items-center sm:items-start">
-              <span className="text-xs font-bold text-foreground">{token}</span>
-              {index === route.length - 1 && (
-                <span className="text-[10px] text-muted-foreground font-medium truncate max-w-[70px]">
-                  {parseFloat(amountOut).toFixed(4)}
-                </span>
-              )}
-            </div>
-            {index < route.length - 1 && (
-              <div className="flex items-center justify-center flex-1 min-w-[30px] px-1">
-                <div className="h-[1px] flex-1 bg-border/60 relative">
-                  <ArrowRight className="h-3 w-3 text-muted-foreground absolute left-1/2 -translate-x-1/2 -translate-y-1/2 bg-transparent" />
-                </div>
-              </div>
-            )}
-          </div>
-        ))}
+      {/* Task 5.1: Route path — flex-col on mobile, flex-row on sm+ */}
+      <div className="flex flex-col sm:flex-row items-center bg-muted/50 rounded-lg p-3 overflow-hidden gap-1 sm:gap-0 sm:justify-between transition-colors duration-150 hover:bg-muted/70">
+        <div className="flex flex-col flex-shrink-0 min-w-[40px] items-center sm:items-start">
+          <span className="text-xs font-semibold">XLM</span>
+          <span className="text-[10px] text-muted-foreground leading-none">Stellar</span>
+        </div>
+
+        <ArrowDown className="h-4 w-4 text-muted-foreground flex-shrink-0 sm:hidden" />
+        <ArrowRight className="h-4 w-4 text-muted-foreground mx-auto flex-shrink-0 hidden sm:block" />
+
+        <div className="px-2 py-1 bg-background rounded-md border text-xs font-medium shadow-sm flex-shrink-0 text-center mx-1">
+          AQUA Pool
+        </div>
+
+        <ArrowDown className="h-4 w-4 text-muted-foreground flex-shrink-0 sm:hidden" />
+        <ArrowRight className="h-4 w-4 text-muted-foreground mx-auto flex-shrink-0 hidden sm:block" />
+
+        <div className="flex flex-col text-right flex-shrink-0 min-w-[60px] items-center sm:items-end">
+          <span className="text-xs font-semibold">USDC</span>
+          <span className="text-[10px] text-muted-foreground truncate max-w-[80px]" title={`${amountOut} expected`}>{amountOut} exp.</span>
+        </div>
       </div>
 
-      {showDetails && (
-        <div className="pt-3 border-t border-border/20 animate-in fade-in slide-in-from-top-1 duration-200">
-          <div className="space-y-2">
-            <div className="flex items-center justify-between text-[11px] text-muted-foreground font-medium uppercase tracking-wider">
-              <span>Hops</span>
-              <span>Provider</span>
-            </div>
-            {route.length > 2 ? (
-              isVirtualized ? (
-                <div
-                  ref={scrollRef}
-                  className="max-h-[250px] overflow-auto pr-2"
-                >
-                  <div
-                    style={{
-                      height: `${rowVirtualizer.getTotalSize()}px`,
-                      width: '100%',
-                      position: 'relative',
-                    }}
-                  >
-                    {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                      const i = virtualRow.index;
-                      const token = hops[i];
-                      return (
-                        <div
-                          key={`hop-${i}`}
-                          ref={rowVirtualizer.measureElement}
-                          data-index={virtualRow.index}
-                          className="flex items-center justify-between p-2 rounded-lg bg-background/50 border border-border/10 text-xs absolute w-full"
-                          style={{
-                            top: 0,
-                            left: 0,
-                            transform: `translateY(${virtualRow.start}px)`,
-                          }}
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="font-semibold">{token}</span>
-                            <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                            <span className="font-semibold">{route[i + 1]}</span>
-                          </div>
-                          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground">
-                            {i % 2 === 0 ? 'AQUA Pool' : 'Orderbook'}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-1.5">
-                  {hops.map((token, i) => (
-                    <div key={`hop-${i}`} className="flex items-center justify-between p-2 rounded-lg bg-background/50 border border-border/10 text-xs">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold">{token}</span>
-                        <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                        <span className="font-semibold">{route[i+1]}</span>
-                      </div>
-                      <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground">
-                        {i % 2 === 0 ? 'AQUA Pool' : 'Orderbook'}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )
-            ) : (
-              <div className="flex items-center justify-between p-2 rounded-lg bg-background/50 border border-border/10 text-xs">
-                <div className="flex items-center gap-2">
-                  <span className="font-semibold">{route[0]}</span>
-                  <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                  <span className="font-semibold">{route[1]}</span>
-                </div>
-                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground">
-                  Direct Path
-                </span>
-              </div>
-            )}
+      <div className="pt-3 border-t border-border/50 overflow-x-hidden">
+        <h4 className="text-[11px] font-medium text-muted-foreground mb-2 uppercase tracking-wider">Alternative Routes</h4>
+        <button
+          type="button"
+          className="w-full flex flex-wrap items-center justify-between gap-1 rounded p-1 -mx-1 text-left opacity-60 transition-all duration-150 hover:bg-muted/50 hover:opacity-100 focus-visible:bg-muted/50 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50 active:scale-[0.99]"
+          onClick={() => console.log("Selecting alternative route...")}
+        >
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="font-medium">XLM</span>
+            <ArrowRight className="h-3 w-3" />
+            <span className="border border-border/50 rounded bg-background px-1.5 py-0.5 text-[10px]">SDEX</span>
+            <ArrowRight className="h-3 w-3" />
+            <span className="font-medium">USDC</span>
           </div>
-        </div>
-      )}
+          <span className="text-xs font-medium text-muted-foreground">≈ {(parseFloat(amountOut) * 0.995).toFixed(4)}</span>
+        </button>
+      </div>
     </div>
   );
 }
