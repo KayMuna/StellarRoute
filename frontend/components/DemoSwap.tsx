@@ -386,6 +386,6 @@ export function DemoSwap() {
           Review Swap
         </Button>
       </div>
-    </div>
+    </Card>
   );
 }
