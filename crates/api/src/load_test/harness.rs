@@ -194,8 +194,11 @@ impl LoadTestHarness {
     {
         info!("Starting load test harness: {}", self.config.name);
         let start_time = Instant::now();
+<<<<<<< fix/329-frontend-transaction-timeline-orchestration-across-wallet-api-and-chain-confirmations
         let (tx, mut _rx) = mpsc::channel::<()>(self.config.concurrent_users * 2);
         drop(tx); // Unused for now, but keeping for future worker coordination
+=======
+>>>>>>> main
 
         // Spawn workers
         let mut workers = vec![];
@@ -232,6 +235,7 @@ impl LoadTestHarness {
                     let should_fail = {
                         let mut rng = rand::thread_rng();
                         let mut fail = false;
+<<<<<<< fix/329-frontend-transaction-timeline-orchestration-across-wallet-api-and-chain-confirmations
                         if config.degradation.db_error_rate > 0.0
                             && rng.gen::<f64>() < config.degradation.db_error_rate
                         {
@@ -251,17 +255,19 @@ impl LoadTestHarness {
                         let amount = generate_amount(&config.amount_distribution, &mut rng);
 
                         let mut should_fail = false;
+=======
+>>>>>>> main
                         if config.degradation.db_error_rate > 0.0
                             && rng.gen::<f64>() < config.degradation.db_error_rate
                         {
-                            should_fail = true;
+                            fail = true;
                         }
                         if config.degradation.rpc_error_rate > 0.0
                             && rng.gen::<f64>() < config.degradation.rpc_error_rate
                         {
-                            should_fail = true;
+                            fail = true;
                         }
-                        (traffic_type, amount, should_fail)
+                        fail
                     };
 
                     let result = if should_fail {
