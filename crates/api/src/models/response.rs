@@ -3,6 +3,30 @@
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+/// Standard API response envelope
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct ApiResponse<T> {
+    pub v: u8,
+    pub timestamp: i64,
+    pub request_id: String,
+    pub data: T,
+}
+
+impl<T> ApiResponse<T> {
+    pub fn new(data: T, request_id: impl Into<String>) -> Self {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as i64;
+        Self {
+            v: 1,
+            timestamp,
+            request_id: request_id.into(),
+            data,
+        }
+    }
+}
+
 /// Per-component health status value
 pub type ComponentStatus = String;
 
@@ -340,6 +364,7 @@ pub enum ExclusionReason {
     Override,
     StaleData,
     CircuitBreakerOpen,
+    LiquidityAnomaly,
 }
 
 /// Machine-readable error codes for API failures
@@ -362,6 +387,12 @@ pub enum ApiErrorCode {
     Unauthorized,
     /// Invalid Stellar asset identifier
     InvalidAsset,
+    /// Invalid amount requested
+    InvalidAmount,
+    /// Invalid slippage tolerance
+    InvalidSlippage,
+    /// Malformed asset identifier format
+    InvalidAssetFormat,
     /// No executable trading route found
     NoRoute,
     /// Underlying market data is too stale to provide a quote
@@ -379,6 +410,9 @@ impl ApiErrorCode {
             Self::Overloaded => "overloaded",
             Self::Unauthorized => "unauthorized",
             Self::InvalidAsset => "invalid_asset",
+            Self::InvalidAmount => "invalid_amount",
+            Self::InvalidSlippage => "invalid_slippage",
+            Self::InvalidAssetFormat => "invalid_asset_format",
             Self::NoRoute => "no_route",
             Self::StaleMarketData => "stale_market_data",
         }

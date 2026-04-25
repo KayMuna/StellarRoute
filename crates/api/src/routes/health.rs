@@ -4,7 +4,11 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use std::{collections::HashMap, sync::Arc};
 use tracing::warn;
 
-use crate::{models::{DependenciesHealthResponse, HealthResponse}, state::AppState};
+use crate::{
+    middleware::RequestId,
+    models::{ApiResponse, DependenciesHealthResponse, HealthResponse},
+    state::AppState,
+};
 
 /// Health check endpoint
 ///
@@ -20,7 +24,10 @@ use crate::{models::{DependenciesHealthResponse, HealthResponse}, state::AppStat
         (status = 503, description = "One or more dependencies unhealthy", body = HealthResponse),
     )
 )]
-pub async fn health_check(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+pub async fn health_check(
+    State(state): State<Arc<AppState>>,
+    request_id: RequestId,
+) -> impl IntoResponse {
     let timestamp = chrono::Utc::now().to_rfc3339();
     let mut components: HashMap<String, String> = HashMap::new();
     let mut all_healthy = true;
@@ -78,7 +85,8 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> impl IntoRespon
         StatusCode::SERVICE_UNAVAILABLE
     };
 
-    (http_status, Json(body)).into_response()
+    let envelope = ApiResponse::new(body, request_id.to_string());
+    (http_status, Json(envelope)).into_response()
 }
 
 /// Dependency readiness check for infrastructure and external providers.
@@ -93,6 +101,7 @@ pub async fn health_check(State(state): State<Arc<AppState>>) -> impl IntoRespon
 )]
 pub async fn dependency_health(
     State(state): State<Arc<AppState>>,
+    request_id: RequestId,
 ) -> impl IntoResponse {
     let timestamp = chrono::Utc::now().to_rfc3339();
     let mut components: HashMap<String, String> = HashMap::new();
@@ -149,5 +158,6 @@ pub async fn dependency_health(
         StatusCode::SERVICE_UNAVAILABLE
     };
 
-    (http_status, Json(body)).into_response()
+    let envelope = ApiResponse::new(body, request_id.to_string());
+    (http_status, Json(envelope)).into_response()
 }

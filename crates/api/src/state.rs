@@ -11,6 +11,8 @@ use crate::graph::GraphManager;
 use crate::models::{QuoteResponse, RoutesResponse};
 use crate::replay::capture::CaptureHook;
 use crate::routes::ws::WsState;
+use stellarroute_routing::adaptive_timeout::TimeoutController;
+use stellarroute_routing::canary::{CanaryConfig, CanaryEvaluation};
 use stellarroute_routing::health::circuit_breaker::CircuitBreakerRegistry;
 
 use crate::worker::{JobQueue, RouteWorkerPool, WorkerPoolConfig};
@@ -135,6 +137,17 @@ pub struct AppState {
     pub ws: Option<Arc<WsState>>,
     /// Shared circuit breaker registry for liquidity providers
     pub circuit_breaker: Arc<CircuitBreakerRegistry>,
+    /// API-level kill switches for sources/venues
+    pub kill_switch: Arc<crate::kill_switch::KillSwitchManager>,
+    /// Shared liquidity anomaly detector
+    pub anomaly_detector:
+        Arc<tokio::sync::Mutex<stellarroute_routing::health::anomaly::LiquidityAnomalyDetector>>,
+    /// Canary configuration for side-by-side policy evaluation
+    pub canary_config: Arc<tokio::sync::RwLock<CanaryConfig>>,
+    /// Canary history buffer for operator reporting
+    pub canary_history: Arc<tokio::sync::RwLock<std::collections::VecDeque<CanaryEvaluation>>>,
+    /// Dynamic timeout controller for quote discovery
+    pub timeout_controller: Arc<TimeoutController>,
 }
 
 impl AppState {
@@ -148,6 +161,8 @@ impl AppState {
         let graph_manager = Arc::new(GraphManager::new(db.write_pool().clone()));
         graph_manager.clone().start_sync();
 
+        let kill_switch = Arc::new(crate::kill_switch::KillSwitchManager::new(None));
+
         Self {
             db,
             cache: None,
@@ -155,14 +170,21 @@ impl AppState {
             cache_policy,
             cache_metrics: Arc::new(CacheMetrics::default()),
             worker_pool,
-            quote_single_flight: Arc::new(
-                SingleFlight::<crate::error::Result<(QuoteResponse, bool)>>::new(),
-            ),
+            quote_single_flight: Arc::new(SingleFlight::<
+                crate::error::Result<(QuoteResponse, bool)>,
+            >::new()),
             replay_capture: None,
             routes_single_flight: Arc::new(SingleFlight::new()),
+            anomaly_detector: graph_manager.anomaly_detector.clone(),
             graph_manager,
             ws: None,
             circuit_breaker: Arc::new(CircuitBreakerRegistry::default()),
+            kill_switch,
+            canary_config: Arc::new(tokio::sync::RwLock::new(CanaryConfig::default())),
+            canary_history: Arc::new(tokio::sync::RwLock::new(
+                std::collections::VecDeque::with_capacity(1000),
+            )),
+            timeout_controller: Arc::new(TimeoutController::new(Default::default())),
         }
     }
 
@@ -180,21 +202,40 @@ impl AppState {
         let graph_manager = Arc::new(GraphManager::new(db.write_pool().clone()));
         graph_manager.clone().start_sync();
 
+        let cache_arc = Arc::new(Mutex::new(cache));
+        let kill_switch = Arc::new(crate::kill_switch::KillSwitchManager::new(Some(
+            cache_arc.clone(),
+        )));
+
+        // Spawn a task to load initial state from Redis
+        let ks = kill_switch.clone();
+        tokio::spawn(async move {
+            ks.load().await;
+            ks.start_sync();
+        });
+
         Self {
             db,
-            cache: Some(Arc::new(Mutex::new(cache))),
+            cache: Some(cache_arc),
             version: env!("CARGO_PKG_VERSION").to_string(),
             cache_policy,
             cache_metrics: Arc::new(CacheMetrics::default()),
             worker_pool,
-            quote_single_flight: Arc::new(
-                SingleFlight::<crate::error::Result<(QuoteResponse, bool)>>::new(),
-            ),
+            quote_single_flight: Arc::new(SingleFlight::<
+                crate::error::Result<(QuoteResponse, bool)>,
+            >::new()),
             replay_capture: None,
             routes_single_flight: Arc::new(SingleFlight::new()),
+            anomaly_detector: graph_manager.anomaly_detector.clone(),
             graph_manager,
             ws: None,
             circuit_breaker: Arc::new(CircuitBreakerRegistry::default()),
+            kill_switch,
+            canary_config: Arc::new(tokio::sync::RwLock::new(CanaryConfig::default())),
+            canary_history: Arc::new(tokio::sync::RwLock::new(
+                std::collections::VecDeque::with_capacity(1000),
+            )),
+            timeout_controller: Arc::new(TimeoutController::new(Default::default())),
         }
     }
 
@@ -227,5 +268,32 @@ impl AppState {
     pub fn with_ws(mut self, ws: Arc<WsState>) -> Self {
         self.ws = Some(ws);
         self
+    }
+
+    /// Calculate a quantitative health score (0.0 to 1.0) based on dependency health
+    pub async fn calculate_health_score(&self) -> f64 {
+        let mut score = 1.0;
+
+        // Check DB
+        if sqlx::query("SELECT 1")
+            .execute(self.db.read_pool())
+            .await
+            .is_err()
+        {
+            score *= 0.5;
+        }
+
+        // Check Redis
+        if let Some(cache) = &self.cache {
+            if let Ok(mut guard) = cache.try_lock() {
+                if !guard.is_healthy().await {
+                    score *= 0.8;
+                }
+            }
+        }
+
+        // Check Horizon (simplified active probe)
+        // In a real app, this would be more sophisticated
+        score
     }
 }

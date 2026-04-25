@@ -7,8 +7,8 @@
 
 use lazy_static::lazy_static;
 use prometheus::{
-    register_histogram_vec, register_int_counter_vec, Encoder, HistogramVec, IntCounterVec,
-    TextEncoder,
+    register_histogram_vec, register_int_counter_vec, register_int_gauge_vec, Encoder,
+    HistogramVec, IntCounterVec, IntGaugeVec, TextEncoder,
 };
 use std::time::Duration;
 
@@ -55,6 +55,37 @@ lazy_static! {
         &["outcome", "cache_hit"]
     )
     .expect("Can't create QUOTE_REQUESTS counter");
+
+    pub static ref KILL_SWITCH_STATUS: IntGaugeVec = register_int_gauge_vec!(
+        "stellarroute_kill_switch_status",
+        "Kill switch status (1 for disabled, 0 for enabled)",
+        &["type", "name"]
+    )
+    .expect("Can't create KILL_SWITCH_STATUS gauge");
+
+    /// Adaptive timeout value in milliseconds
+    pub static ref ADAPTIVE_TIMEOUT_MS: IntGaugeVec = register_int_gauge_vec!(
+        "stellarroute_adaptive_timeout_ms",
+        "Current adaptive timeout value in milliseconds",
+        &["environment"]
+    )
+    .expect("Can't create ADAPTIVE_TIMEOUT_MS gauge");
+
+    /// EMA latency in milliseconds
+    pub static ref EMA_LATENCY_MS: IntGaugeVec = register_int_gauge_vec!(
+        "stellarroute_ema_latency_ms",
+        "Current EMA latency in milliseconds",
+        &["environment"]
+    )
+    .expect("Can't create EMA_LATENCY_MS gauge");
+}
+
+/// Record kill switch status
+pub fn record_kill_switch_status(ks_type: &str, name: &str, disabled: bool) {
+    let value = if disabled { 1 } else { 0 };
+    KILL_SWITCH_STATUS
+        .with_label_values(&[ks_type, name])
+        .set(value);
 }
 
 /// Record quote latency metric
@@ -89,6 +120,16 @@ pub fn record_cache_hit(cache_type: &str) {
 /// Record cache miss
 pub fn record_cache_miss(cache_type: &str) {
     CACHE_MISSES.with_label_values(&[cache_type]).inc();
+}
+
+/// Record adaptive timeout metrics
+pub fn record_adaptive_timeout(timeout_ms: u64, ema_ms: u64, environment: &str) {
+    ADAPTIVE_TIMEOUT_MS
+        .with_label_values(&[environment])
+        .set(timeout_ms as i64);
+    EMA_LATENCY_MS
+        .with_label_values(&[environment])
+        .set(ema_ms as i64);
 }
 
 /// Get cache hit ratio for a given cache type
