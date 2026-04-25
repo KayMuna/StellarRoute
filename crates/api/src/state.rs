@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 use crate::cache::{CacheManager, SingleFlight};
 
 use crate::graph::GraphManager;
-use crate::models::{QuoteResponse, RoutesResponse};
+use crate::models::{PreparedQuoteResponse, RoutesResponse};
 use crate::replay::capture::CaptureHook;
 use crate::routes::ws::WsState;
 use stellarroute_routing::health::circuit_breaker::CircuitBreakerRegistry;
@@ -122,7 +122,7 @@ pub struct AppState {
     /// Route computation worker pool
     pub worker_pool: Arc<RouteWorkerPool>,
     /// Single-flight manager for quotes to prevent stampedes
-    pub quote_single_flight: Arc<SingleFlight<crate::error::Result<(QuoteResponse, bool)>>>,
+    pub quote_single_flight: Arc<SingleFlight<crate::error::Result<(PreparedQuoteResponse, bool)>>>,
 
     /// Optional replay capture hook (None when REPLAY_CAPTURE_ENABLED=false)
     pub replay_capture: Option<Arc<CaptureHook>>,
@@ -138,7 +138,8 @@ pub struct AppState {
     /// API-level kill switches for sources/venues
     pub kill_switch: Arc<crate::kill_switch::KillSwitchManager>,
     /// Shared liquidity anomaly detector
-    pub anomaly_detector: Arc<tokio::sync::Mutex<stellarroute_routing::health::anomaly::LiquidityAnomalyDetector>>,
+    pub anomaly_detector:
+        Arc<tokio::sync::Mutex<stellarroute_routing::health::anomaly::LiquidityAnomalyDetector>>,
 }
 
 impl AppState {
@@ -162,7 +163,7 @@ impl AppState {
             cache_metrics: Arc::new(CacheMetrics::default()),
             worker_pool,
             quote_single_flight: Arc::new(SingleFlight::<
-                crate::error::Result<(QuoteResponse, bool)>,
+                crate::error::Result<(PreparedQuoteResponse, bool)>,
             >::new()),
             replay_capture: None,
             routes_single_flight: Arc::new(SingleFlight::new()),
@@ -208,7 +209,7 @@ impl AppState {
             cache_metrics: Arc::new(CacheMetrics::default()),
             worker_pool,
             quote_single_flight: Arc::new(SingleFlight::<
-                crate::error::Result<(QuoteResponse, bool)>,
+                crate::error::Result<(PreparedQuoteResponse, bool)>,
             >::new()),
             replay_capture: None,
             routes_single_flight: Arc::new(SingleFlight::new()),

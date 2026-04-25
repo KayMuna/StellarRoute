@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react';
 import { useQuoteRefresh } from './useQuoteRefresh';
-import type { Asset, QuoteType } from '@/types';
+import type { QuoteType } from '@/types';
 
 interface UseQuoteProps {
   fromToken: string; // asset identifier "native" or "CODE:ISSUER"
@@ -22,7 +22,8 @@ export interface QuoteResult {
   isStale: boolean;
   isRecovering: boolean;
   retryAttempt: number;
-  refresh: () => void;
+  lastQuotedAtMs: number | null;
+  refresh: (options?: { force?: boolean }) => void;
   data: import('@/types').PriceQuote | undefined;
 }
 
@@ -32,7 +33,16 @@ export interface QuoteResult {
  * Adapts the robust useQuoteRefresh hook to the specific swap interface requirements.
  */
 export function useQuote({ fromToken, toToken, amount, type = 'sell' }: UseQuoteProps): QuoteResult {
-  const { data, loading, error, isStale, isRecovering, retryAttempt, refresh } = useQuoteRefresh(
+  const {
+    data,
+    loading,
+    error,
+    isStale,
+    isRecovering,
+    retryAttempt,
+    lastQuotedAtMs,
+    refresh,
+  } = useQuoteRefresh(
     fromToken,
     toToken,
     amount,
@@ -92,6 +102,7 @@ export function useQuote({ fromToken, toToken, amount, type = 'sell' }: UseQuote
     isStale,
     isRecovering,
     retryAttempt,
+    lastQuotedAtMs,
     refresh,
     data,
   };
