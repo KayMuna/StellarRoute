@@ -176,7 +176,8 @@ impl ExclusionPolicy {
         match (source_directive, venue_directive) {
             (_, Some(OverrideDirective::ForceInclude))
             | (Some(OverrideDirective::ForceInclude), _) => false,
-            (_, Some(OverrideDirective::ForceExclude)) => true,
+            (_, Some(OverrideDirective::ForceExclude))
+            | (Some(OverrideDirective::ForceExclude), _) => true,
             (None, None) => {
                 if let Some(registry) = &self.circuit_breaker {
                     if registry.is_venue_excluded(venue_ref) {

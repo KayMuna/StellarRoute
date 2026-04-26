@@ -22,14 +22,16 @@ export interface QuoteResult {
   isStale: boolean;
   isRecovering: boolean;
   retryAttempt: number;
-  lastQuotedAtMs: number | null;
-  refresh: (options?: { force?: boolean }) => void;
+  hasPendingRetry: boolean;
+  pendingRetryRemainingMs: number;
+  cancelRetry: () => void;
+  refresh: () => void;
   data: import('@/types').PriceQuote | undefined;
 }
 
 /**
  * Hook to fetch real-time swap quotes with debouncing and state management.
- * 
+ *
  * Adapts the robust useQuoteRefresh hook to the specific swap interface requirements.
  */
 export function useQuote({ fromToken, toToken, amount, type = 'sell' }: UseQuoteProps): QuoteResult {
@@ -40,7 +42,9 @@ export function useQuote({ fromToken, toToken, amount, type = 'sell' }: UseQuote
     isStale,
     isRecovering,
     retryAttempt,
-    lastQuotedAtMs,
+    hasPendingRetry,
+    pendingRetryRemainingMs,
+    cancelRetry,
     refresh,
   } = useQuoteRefresh(
     fromToken,
@@ -50,7 +54,7 @@ export function useQuote({ fromToken, toToken, amount, type = 'sell' }: UseQuote
     {
       debounceMs: 300,
       autoRefreshIntervalMs: 15000,
-    }
+    },
   );
 
   const result = useMemo(() => {
@@ -67,7 +71,7 @@ export function useQuote({ fromToken, toToken, amount, type = 'sell' }: UseQuote
     // Parse the data from the PriceQuote response
     const outputAmount = parseFloat(data.total) || 0;
     const priceImpact = parseFloat(data.price_impact || '0') || 0;
-    
+
     // Extract route symbols from path
     const route = data.path.reduce((acc: string[], step) => {
       const fromCode = step.from_asset.asset_code || 'XLM';
@@ -102,7 +106,9 @@ export function useQuote({ fromToken, toToken, amount, type = 'sell' }: UseQuote
     isStale,
     isRecovering,
     retryAttempt,
-    lastQuotedAtMs,
+    hasPendingRetry,
+    pendingRetryRemainingMs,
+    cancelRetry,
     refresh,
     data,
   };
