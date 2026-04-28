@@ -8,14 +8,17 @@ use tokio::sync::Mutex;
 use crate::cache::{CacheManager, SingleFlight};
 
 use crate::graph::GraphManager;
-use crate::models::{QuoteResponse, RoutesResponse};
+use crate::models::{PreparedQuoteResponse, RoutesResponse};
 use crate::replay::capture::CaptureHook;
 use crate::routes::ws::WsState;
 use stellarroute_routing::adaptive_timeout::TimeoutController;
 use stellarroute_routing::canary::{CanaryConfig, CanaryEvaluation};
 use stellarroute_routing::health::circuit_breaker::CircuitBreakerRegistry;
 
+use crate::audit::AuditWriter;
+use crate::indexer_lag::IndexerLagMonitor;
 use crate::worker::{JobQueue, RouteWorkerPool, WorkerPoolConfig};
+use crate::exactlyonce::DedupeLedger;
 
 /// Primary database pool for write operations plus an optional replica pool
 /// for read-heavy endpoints.
@@ -38,6 +41,11 @@ impl DatabasePools {
 
     pub fn write_pool(&self) -> &PgPool {
         &self.primary
+    }
+
+    /// Returns the replica pool if one is configured, otherwise `None`.
+    pub fn replica_pool(&self) -> Option<&PgPool> {
+        self.replica.as_ref()
     }
 }
 
@@ -124,7 +132,7 @@ pub struct AppState {
     /// Route computation worker pool
     pub worker_pool: Arc<RouteWorkerPool>,
     /// Single-flight manager for quotes to prevent stampedes
-    pub quote_single_flight: Arc<SingleFlight<crate::error::Result<(QuoteResponse, bool)>>>,
+    pub quote_single_flight: Arc<SingleFlight<crate::error::Result<(PreparedQuoteResponse, bool)>>>,
 
     /// Optional replay capture hook (None when REPLAY_CAPTURE_ENABLED=false)
     pub replay_capture: Option<Arc<CaptureHook>>,
@@ -148,6 +156,12 @@ pub struct AppState {
     pub canary_history: Arc<tokio::sync::RwLock<std::collections::VecDeque<CanaryEvaluation>>>,
     /// Dynamic timeout controller for quote discovery
     pub timeout_controller: Arc<TimeoutController>,
+    /// Non-blocking audit log writer for route decisions
+    pub audit_writer: Arc<AuditWriter>,
+    /// Indexer lag monitor for sync drift detection
+    pub indexer_lag: Arc<IndexerLagMonitor>,
+    /// Idempotency ledger for POST /api/v1/quote deduplication
+    pub idempotency_ledger: Arc<DedupeLedger>,
 }
 
 impl AppState {
@@ -162,6 +176,17 @@ impl AppState {
         graph_manager.clone().start_sync();
 
         let kill_switch = Arc::new(crate::kill_switch::KillSwitchManager::new(None));
+        let audit_writer = Arc::new(AuditWriter::from_env(db.write_pool().clone()));
+        let indexer_lag = Arc::new(IndexerLagMonitor::from_env(db.write_pool().clone()));
+        indexer_lag
+            .clone()
+            .start_polling(std::time::Duration::from_secs(30));
+
+        let idempotency_ledger = {
+            let ledger = Arc::new(DedupeLedger::new(60));
+            ledger.clone().spawn_cleanup_task();
+            ledger
+        };
 
         Self {
             db,
@@ -171,7 +196,7 @@ impl AppState {
             cache_metrics: Arc::new(CacheMetrics::default()),
             worker_pool,
             quote_single_flight: Arc::new(SingleFlight::<
-                crate::error::Result<(QuoteResponse, bool)>,
+                crate::error::Result<(PreparedQuoteResponse, bool)>,
             >::new()),
             replay_capture: None,
             routes_single_flight: Arc::new(SingleFlight::new()),
@@ -185,6 +210,9 @@ impl AppState {
                 std::collections::VecDeque::with_capacity(1000),
             )),
             timeout_controller: Arc::new(TimeoutController::new(Default::default())),
+            audit_writer,
+            indexer_lag,
+            idempotency_ledger,
         }
     }
 
@@ -206,6 +234,11 @@ impl AppState {
         let kill_switch = Arc::new(crate::kill_switch::KillSwitchManager::new(Some(
             cache_arc.clone(),
         )));
+        let audit_writer = Arc::new(AuditWriter::from_env(db.write_pool().clone()));
+        let indexer_lag = Arc::new(IndexerLagMonitor::from_env(db.write_pool().clone()));
+        indexer_lag
+            .clone()
+            .start_polling(std::time::Duration::from_secs(30));
 
         // Spawn a task to load initial state from Redis
         let ks = kill_switch.clone();
@@ -213,6 +246,12 @@ impl AppState {
             ks.load().await;
             ks.start_sync();
         });
+
+        let idempotency_ledger = {
+            let ledger = Arc::new(DedupeLedger::new(60));
+            ledger.clone().spawn_cleanup_task();
+            ledger
+        };
 
         Self {
             db,
@@ -222,7 +261,7 @@ impl AppState {
             cache_metrics: Arc::new(CacheMetrics::default()),
             worker_pool,
             quote_single_flight: Arc::new(SingleFlight::<
-                crate::error::Result<(QuoteResponse, bool)>,
+                crate::error::Result<(PreparedQuoteResponse, bool)>,
             >::new()),
             replay_capture: None,
             routes_single_flight: Arc::new(SingleFlight::new()),
@@ -236,6 +275,9 @@ impl AppState {
                 std::collections::VecDeque::with_capacity(1000),
             )),
             timeout_controller: Arc::new(TimeoutController::new(Default::default())),
+            audit_writer,
+            indexer_lag,
+            idempotency_ledger,
         }
     }
 
@@ -243,7 +285,22 @@ impl AppState {
     fn create_worker_pool(db: PgPool) -> Arc<RouteWorkerPool> {
         let queue = JobQueue::new(db);
         let config = WorkerPoolConfig::default();
-        Arc::new(RouteWorkerPool::new(config, queue))
+        let pool = Arc::new(RouteWorkerPool::new(config, queue));
+
+        // Spawn a background task that periodically pushes per-priority queue
+        // depth and virtual-clock values to Prometheus gauges.
+        let pool_ref = pool.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+            loop {
+                interval.tick().await;
+                let snapshot = pool_ref.metrics().await;
+                crate::metrics::update_queue_depth_gauges(&snapshot.pending_by_priority);
+                crate::metrics::update_virtual_clock(snapshot.virtual_clock);
+            }
+        });
+
+        pool
     }
 
     /// Wrap in Arc for sharing across handlers

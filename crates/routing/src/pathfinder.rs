@@ -168,6 +168,7 @@ impl Pathfinder {
                 continue;
             }
 
+            // Explore neighbors
             for edge in graph.get_neighbors(current_idx) {
                 let venue_type = if edge.venue_type_idx == 1 {
                     "amm"
