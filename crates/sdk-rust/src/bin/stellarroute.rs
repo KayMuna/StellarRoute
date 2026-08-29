@@ -3,8 +3,8 @@ use serde::Serialize;
 use std::ffi::OsStr;
 use std::num::NonZeroUsize;
 use stellarroute_sdk::{
-    HealthResponse, OrderbookLevel, OrderbookResponse, PairsResponse, QuoteRequest, QuoteResponse,
-    QuoteType, SdkError, StellarRouteClient,
+    HealthResponse, OrderbookLevel, OrderbookResponse, PairsResponse, PriceHistoryResponse,
+    QuoteRequest, QuoteResponse, QuoteType, SdkError, StellarRouteClient,
 };
 
 const EXIT_SUCCESS: i32 = 0;
@@ -106,6 +106,19 @@ enum Commands {
             help = "Maximum number of levels to print per side"
         )]
         levels: NonZeroUsize,
+    },
+    #[command(about = "Fetch 24-hour price history for a trading pair")]
+    PriceHistory {
+        #[arg(
+            value_parser = parse_asset,
+            help = "Base asset: native, CODE, or CODE:ISSUER"
+        )]
+        base: String,
+        #[arg(
+            value_parser = parse_asset,
+            help = "Quote asset: native, CODE, or CODE:ISSUER"
+        )]
+        quote: String,
     },
 }
 
@@ -225,6 +238,11 @@ async fn run(cli: Cli) -> Result<String, (i32, String)> {
         } => render_orderbook(&client, &base, &quote, levels.get(), cli.output)
             .await
             .map_err(|error| (exit_code_for_sdk_error(&error), error.to_string())),
+        Commands::PriceHistory { base, quote } => {
+            render_price_history(&client, &base, &quote, cli.output)
+                .await
+                .map_err(|error| (exit_code_for_sdk_error(&error), error.to_string()))
+        }
     }
 }
 
@@ -269,6 +287,62 @@ async fn render_orderbook(
     response.bids.truncate(levels);
 
     format_orderbook(&response, output)
+}
+
+async fn render_price_history(
+    client: &StellarRouteClient,
+    base: &str,
+    quote: &str,
+    output: OutputFormat,
+) -> Result<String, SdkError> {
+    let response = client.price_history(base, quote).await?;
+    format_price_history(&response, output)
+}
+
+fn format_price_history(
+    response: &PriceHistoryResponse,
+    output: OutputFormat,
+) -> Result<String, SdkError> {
+    match output {
+        OutputFormat::Json => serde_json::to_string_pretty(response).map_err(Into::into),
+        OutputFormat::Table => {
+            let header = format!(
+                "pair: {} / {}\nwindow: {}",
+                response.base_asset.display_name(),
+                response.quote_asset.display_name(),
+                response.window,
+            );
+            let rows = response
+                .points
+                .iter()
+                .map(|p| vec![p.timestamp.to_string(), p.price.clone()])
+                .collect::<Vec<_>>();
+            Ok(format!(
+                "{}\n\n{}",
+                header,
+                format_table(&["timestamp", "price"], rows)
+            ))
+        }
+        OutputFormat::Human => {
+            let mut lines = vec![
+                format!(
+                    "pair: {} / {}",
+                    response.base_asset.display_name(),
+                    response.quote_asset.display_name()
+                ),
+                format!("window: {}", response.window),
+                format!("source: {}", response.source),
+            ];
+            if response.points.is_empty() {
+                lines.push("no data".to_string());
+            } else {
+                for point in &response.points {
+                    lines.push(format!("{}  {}", point.timestamp, point.price));
+                }
+            }
+            Ok(lines.join("\n"))
+        }
+    }
 }
 
 fn format_health(response: &HealthResponse, output: OutputFormat) -> Result<String, SdkError> {
@@ -647,7 +721,7 @@ fn parse_asset(value: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use stellarroute_sdk::{ApiErrorCode, AssetInfo, PathStep, TradingPair};
+    use stellarroute_sdk::{ApiErrorCode, AssetInfo, PathStep, PriceHistoryPoint, PriceHistoryResponse, TradingPair};
 
     #[test]
     fn clap_help_is_well_formed() {
@@ -878,5 +952,142 @@ step | from   | to   | price     | source
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn sample_price_history_response() -> PriceHistoryResponse {
+        PriceHistoryResponse {
+            base_asset: AssetInfo {
+                asset_type: "native".to_string(),
+                asset_code: None,
+                asset_issuer: None,
+            },
+            quote_asset: AssetInfo {
+                asset_type: "credit_alphanum4".to_string(),
+                asset_code: Some("USDC".to_string()),
+                asset_issuer: Some(
+                    "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN".to_string(),
+                ),
+            },
+            window: "24h".to_string(),
+            source: "orderbook_snapshots".to_string(),
+            generated_at: 1_742_908_800_000,
+            points: vec![
+                PriceHistoryPoint {
+                    timestamp: 1_742_822_400_000,
+                    price: "0.1040000".to_string(),
+                },
+                PriceHistoryPoint {
+                    timestamp: 1_742_826_000_000,
+                    price: "0.1050000".to_string(),
+                },
+                PriceHistoryPoint {
+                    timestamp: 1_742_829_600_000,
+                    price: "0.1060000".to_string(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn snapshot_price_history_human() {
+        let rendered = format_price_history(&sample_price_history_response(), OutputFormat::Human)
+            .expect("formatting should succeed");
+        // Verify key structural elements rather than exact snapshot to avoid whitespace brittleness.
+        assert!(rendered.starts_with("pair: native / USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN\nwindow: 24h\nsource: orderbook_snapshots\n"));
+        assert!(rendered.contains("1742822400000  0.1040000"));
+        assert!(rendered.contains("1742826000000  0.1050000"));
+        assert!(rendered.contains("1742829600000  0.1060000"));
+    }
+
+    #[test]
+    fn snapshot_price_history_table() {
+        let rendered = format_price_history(&sample_price_history_response(), OutputFormat::Table)
+            .expect("formatting should succeed");
+        assert!(rendered.contains("pair: native / USDC:GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN"));
+        assert!(rendered.contains("window: 24h"));
+        assert!(rendered.contains("timestamp"));
+        assert!(rendered.contains("price"));
+        assert!(rendered.contains("1742822400000"));
+        assert!(rendered.contains("0.1040000"));
+        assert!(rendered.contains("1742826000000"));
+        assert!(rendered.contains("1742829600000"));
+    }
+
+    #[test]
+    fn snapshot_price_history_json() {
+        let rendered =
+            format_price_history(&sample_price_history_response(), OutputFormat::Json)
+                .expect("formatting should succeed");
+        // Verify JSON structure and field names.
+        let parsed: serde_json::Value =
+            serde_json::from_str(&rendered).expect("output should be valid JSON");
+        assert!(parsed["base_asset"].is_object());
+        assert!(parsed["quote_asset"].is_object());
+        assert_eq!(parsed["window"], "24h");
+        assert_eq!(parsed["source"], "orderbook_snapshots");
+        assert_eq!(parsed["generated_at"], 1_742_908_800_000_i64);
+        assert!(parsed["points"].is_array());
+        assert_eq!(parsed["points"].as_array().unwrap().len(), 3);
+        assert_eq!(parsed["points"][0]["price"], "0.1040000");
+        assert_eq!(parsed["points"][0]["timestamp"], 1_742_822_400_000_i64);
+    }
+
+    #[test]
+    fn price_history_human_empty_points() {
+        let mut response = sample_price_history_response();
+        response.points = vec![];
+        let rendered = format_price_history(&response, OutputFormat::Human)
+            .expect("formatting should succeed");
+        assert!(rendered.contains("no data"), "expected 'no data' in: {rendered}");
+        assert!(rendered.contains("pair:"), "expected 'pair:' in: {rendered}");
+        assert!(rendered.contains("window:"), "expected 'window:' in: {rendered}");
+    }
+
+    #[test]
+    fn price_history_table_empty_points() {
+        let mut response = sample_price_history_response();
+        response.points = vec![];
+        let rendered = format_price_history(&response, OutputFormat::Table)
+            .expect("formatting should succeed");
+        assert!(rendered.contains("pair:"), "expected 'pair:' in: {rendered}");
+        assert!(rendered.contains("window:"), "expected 'window:' in: {rendered}");
+        assert!(rendered.contains("timestamp"), "expected header 'timestamp' in: {rendered}");
+        // No data rows — just header + separator
+        let lines: Vec<&str> = rendered.lines().collect();
+        let data_lines: Vec<&&str> = lines
+            .iter()
+            .filter(|l| {
+                !l.is_empty()
+                    && !l.contains("pair:")
+                    && !l.contains("window:")
+                    && !l.contains("timestamp")
+                    && !l.chars().all(|c| c == '-' || c == '+' || c == ' ' || c == '|')
+            })
+            .collect();
+        assert!(data_lines.is_empty(), "expected no data rows, got: {data_lines:?}");
+    }
+
+    #[test]
+    fn price_history_rejects_invalid_asset() {
+        let error = Cli::try_parse_from([
+            "stellarroute",
+            "price-history",
+            "bad:too:many:parts",
+            "USDC",
+        ])
+        .expect_err("asset should fail");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+    }
+
+    #[test]
+    fn price_history_listed_in_help() {
+        let mut cmd = Cli::command();
+        let mut buf = Vec::new();
+        cmd.write_long_help(&mut buf).unwrap();
+        let help_text = String::from_utf8(buf).unwrap();
+        assert!(
+            help_text.contains("price-history"),
+            "expected 'price-history' in help output"
+        );
     }
 }
