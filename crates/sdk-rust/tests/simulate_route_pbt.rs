@@ -39,14 +39,18 @@ fn arb_asset_info() -> impl Strategy<Value = AssetInfo> {
 
 /// Strategy for arbitrary `PathStep` values.
 fn arb_path_step() -> impl Strategy<Value = PathStep> {
-    (arb_asset_info(), arb_asset_info(), "[0-9.]{3,12}", "[a-z]{3,6}").prop_map(
-        |(from_asset, to_asset, price, source)| PathStep {
+    (
+        arb_asset_info(),
+        arb_asset_info(),
+        "[0-9.]{3,12}",
+        "[a-z]{3,6}",
+    )
+        .prop_map(|(from_asset, to_asset, price, source)| PathStep {
             from_asset,
             to_asset,
             price,
             source,
-        },
-    )
+        })
 }
 
 /// Strategy for arbitrary `DryRunHop` values.
@@ -82,15 +86,13 @@ fn arb_swap_hop_dto() -> impl Strategy<Value = SwapHopDto> {
         any::<u32>(),
     )
         .prop_map(
-            |(source_asset, destination_asset, venue_type, venue_ref, price, fee_bps)| {
-                SwapHopDto {
-                    source_asset,
-                    destination_asset,
-                    venue_type,
-                    venue_ref,
-                    price,
-                    fee_bps,
-                }
+            |(source_asset, destination_asset, venue_type, venue_ref, price, fee_bps)| SwapHopDto {
+                source_asset,
+                destination_asset,
+                venue_type,
+                venue_ref,
+                price,
+                fee_bps,
             },
         )
 }

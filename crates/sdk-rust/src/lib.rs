@@ -35,6 +35,6 @@ pub use types::{
     HealthResponse, OrderbookLevel, OrderbookResponse, PairsResponse, PathStep, PriceHistoryPoint,
     PriceHistoryResponse, QuoteRequest, QuoteResponse, QuoteType, Route, RouteHop, RoutesRequest,
     RoutesResponse, SimulateQuoteResult, SimulateRouteRequest, SimulateRouteResponse,
-    SlippageOverride, SwapHopDto, SwapPrepareRequest, SwapPrepareResponse, SwapPathDto,
+    SlippageOverride, SwapHopDto, SwapPathDto, SwapPrepareRequest, SwapPrepareResponse,
     SwapSubmitRequest, SwapSubmitResponse, TradingPair,
 };

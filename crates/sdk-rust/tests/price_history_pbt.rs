@@ -12,7 +12,9 @@
 // test the behaviour through the public SDK types and serde round-trips.
 
 use proptest::prelude::*;
-use stellarroute_sdk::{ApiErrorCode, AssetInfo, PriceHistoryPoint, PriceHistoryResponse, SdkError};
+use stellarroute_sdk::{
+    ApiErrorCode, AssetInfo, PriceHistoryPoint, PriceHistoryResponse, SdkError,
+};
 
 // ── Proptest strategies ───────────────────────────────────────────────────────
 
@@ -37,10 +39,8 @@ fn arb_asset_info() -> impl Strategy<Value = AssetInfo> {
 
 /// Strategy for arbitrary `PriceHistoryPoint` values.
 fn arb_price_history_point() -> impl Strategy<Value = PriceHistoryPoint> {
-    (any::<i64>(), "[0-9]{1,10}\\.[0-9]{7}").prop_map(|(timestamp, price)| PriceHistoryPoint {
-        timestamp,
-        price,
-    })
+    (any::<i64>(), "[0-9]{1,10}\\.[0-9]{7}")
+        .prop_map(|(timestamp, price)| PriceHistoryPoint { timestamp, price })
 }
 
 /// Strategy for arbitrary `PriceHistoryResponse` with 0–24 points.
@@ -273,7 +273,11 @@ fn format_price_history_table(response: &PriceHistoryResponse) -> String {
         .iter()
         .map(|p| vec![p.timestamp.to_string(), p.price.clone()])
         .collect();
-    format!("{}\n\n{}", header, format_table(&["timestamp", "price"], rows))
+    format!(
+        "{}\n\n{}",
+        header,
+        format_table(&["timestamp", "price"], rows)
+    )
 }
 
 fn format_price_history_human(response: &PriceHistoryResponse) -> String {

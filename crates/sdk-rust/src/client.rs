@@ -192,12 +192,9 @@ impl StellarRouteClient {
     /// Returns [`SdkError::Api`] with [`ApiErrorCode::ValidationError`] for HTTP 400,
     /// [`ApiErrorCode::NoRoute`] for HTTP 404 (pair not found or no data), and
     /// [`SdkError::RateLimited`] after exhausted retries on HTTP 429.
-    pub async fn price_history(
-        &self,
-        base: &str,
-        quote: &str,
-    ) -> Result<PriceHistoryResponse> {
-        self.get(&format!("api/v1/price-history/{base}/{quote}")).await
+    pub async fn price_history(&self, base: &str, quote: &str) -> Result<PriceHistoryResponse> {
+        self.get(&format!("api/v1/price-history/{base}/{quote}"))
+            .await
     }
 
     /// `GET /api/v1/quote/{base}/{quote}` — get best price quote.
@@ -399,9 +396,9 @@ impl StellarRouteClient {
         request: SimulateRouteRequest,
     ) -> Result<SimulateRouteResponse> {
         let url = self.url("api/v1/simulate/route")?;
-        let envelope: ApiEnvelope<SimulateRouteResponse> =
-            self.execute_with_retry(|| self.http.post(url.clone()).json(&request))
-                .await?;
+        let envelope: ApiEnvelope<SimulateRouteResponse> = self
+            .execute_with_retry(|| self.http.post(url.clone()).json(&request))
+            .await?;
         Ok(envelope.data)
     }
 

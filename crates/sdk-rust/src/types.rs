@@ -597,7 +597,10 @@ pub struct SimulateRouteRequest {
 }
 
 impl Serialize for SimulateRouteRequest {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
         SimulateRouteRequestWire {
             route: RouteWrapper { hops: &self.hops },
             amount: &self.amount,

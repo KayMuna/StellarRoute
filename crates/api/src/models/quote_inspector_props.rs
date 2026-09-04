@@ -14,8 +14,7 @@ mod tests {
     }
 
     fn openapi_yaml() -> String {
-        std::fs::read_to_string("docs/api/openapi.yaml")
-            .expect("docs/api/openapi.yaml not found")
+        std::fs::read_to_string("docs/api/openapi.yaml").expect("docs/api/openapi.yaml not found")
     }
 
     // Feature: quote-inspector-operator-guide, Property 1: all documented QuoteResponse field names exist in the schema
