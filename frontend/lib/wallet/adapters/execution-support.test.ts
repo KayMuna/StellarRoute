@@ -61,6 +61,7 @@ describe('execution support', () => {
   });
 
   it('reports no backend route for non-stellar pairs even when signing is available', () => {
+    // Proven testnet CCTP directions have backend routes in both directions.
     expect(hasBackendRoute('stellar', 'evm')).toBe(true);
     expect(hasBackendRoute('evm', 'stellar')).toBe(true);
     expect(hasBackendRoute('bitcoin', 'stellar')).toBe(false);
@@ -98,6 +99,18 @@ describe('execution support', () => {
     expect(tronSame).toMatchObject({
       kind: 'unsupported',
       code: 'no_backend_route',
+    });
+  });
+
+  it('reports signing_only on a routed cross-chain direction', () => {
+    const support = resolveExecutionSupport(
+      'evm',
+      { sourceChain: 'evm', destinationChain: 'stellar' },
+      { connected: true, networkMatch: true, canSign: true }
+    );
+    expect(support).toMatchObject({
+      kind: 'signing_only',
+      code: 'chain_signing_available',
     });
   });
 

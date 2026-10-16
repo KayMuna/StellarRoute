@@ -23,11 +23,19 @@ mod tests {
     }
 
     fn runbook() -> String {
-        read_file("docs/runbooks/quote-inspector.md")
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/runbooks/quote-inspector.md"
+        ))
+        .expect("docs/runbooks/quote-inspector.md not found — was it created?")
     }
 
     fn openapi_yaml() -> String {
-        read_file("docs/api/openapi.yaml")
+        std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../docs/api/openapi.yaml"
+        ))
+        .expect("docs/api/openapi.yaml not found")
     }
 
     // Feature: quote-inspector-operator-guide, Property 1: all documented QuoteResponse field names exist in the schema

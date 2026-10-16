@@ -5,15 +5,15 @@
 //! | Field                          | Before                                    | After                        |
 //! |--------------------------------|-------------------------------------------|------------------------------|
 //! | `inputs.base` / `inputs.quote` | `"USDC:GBBD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5"` | `"USDC:[REDACTED]"` |
-//! | `selected.path[*].from`        | `"USDC:GBBD47…"`                          | `"USDC:[REDACTED]"`          |
-//! | `selected.path[*].to`          | `"USDC:GBBD47…"`                          | `"USDC:[REDACTED]"`          |
+//! | `selected.path[*].from`        | `"USDC:GBBD47."`                          | `"USDC:[REDACTED]"`          |
+//! | `selected.path[*].to`          | `"USDC:GBBD47."`                          | `"USDC:[REDACTED]"`          |
 //!
 //! # What is NOT redacted
 //!
-//! - `venue_ref` — offer IDs and pool addresses are public on-chain data.
-//! - `price`, `amount`, `slippage_bps` — non-identifying numeric values.
-//! - `request_id`, `trace_id` — correlation IDs that must remain intact.
-//! - `strategy`, `source` — internal labels with no PII.
+//! - `venue_ref` - offer IDs and pool addresses are public on-chain data.
+//! - `price`, `amount`, `slippage_bps` - non-identifying numeric values.
+//! - `request_id`, `trace_id` - correlation IDs that must remain intact.
+//! - `strategy`, `source` - internal labels with no PII.
 //!
 //! # Relationship to `replay::Redactor`
 //!
@@ -73,9 +73,9 @@ impl AuditRedactor {
 
 /// Redact the issuer portion of a canonical asset string.
 ///
-/// - `"native"` → `"native"` (unchanged)
-/// - `"USDC"` → `"USDC"` (no issuer — unchanged)
-/// - `"USDC:GBBD47…"` → `"USDC:[REDACTED]"`
+/// - `"native"` ? `"native"` (unchanged)
+/// - `"USDC"` ? `"USDC"` (no issuer - unchanged)
+/// - `"USDC:GBBD47."` ? `"USDC:[REDACTED]"`
 pub fn redact_canonical_asset(s: &str) -> String {
     if s == "native" {
         return s.to_string();
@@ -125,8 +125,37 @@ fn redact_path_step(step: &mut AuditPathStep) {
     step.to = redact_canonical_asset(&step.to);
 }
 
-// ─── Tests ───────────────────────────────────────────────────────────────────
+// ??? Tests ???????????????????????????????????????????????????????????????????
 
+
+/// Keys that must be redacted in card-related audit bodies.
+pub const CARD_SENSITIVE_KEYS: &[&str] = &["pan", "cvv", "cvc", "track", "card_webhook_hmac_key"];
+pub const CARD_REDACTED: &str = REDACTED;
+
+/// Recursively redact card-sensitive keys in a JSON value.
+/// Keeps Stellar addresses and other non-sensitive data intact.
+pub fn redact_card_value(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (k, v) in map.iter_mut() {
+                if CARD_SENSITIVE_KEYS
+                    .iter()
+                    .any(|key| key.eq_ignore_ascii_case(k))
+                {
+                    *v = serde_json::Value::String(CARD_REDACTED.to_owned());
+                } else {
+                    redact_card_value(v);
+                }
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr {
+                redact_card_value(v);
+            }
+        }
+        _ => {}
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,7 +245,7 @@ mod tests {
     fn venue_ref_is_not_redacted() {
         let mut entry = make_entry_with_issuer(ISSUER);
         AuditRedactor::redact(&mut entry);
-        // venue_ref is public on-chain data — must not be redacted
+        // venue_ref is public on-chain data - must not be redacted
         assert_eq!(entry.selected.as_ref().unwrap().venue_ref, "offer1");
         assert_eq!(entry.exclusions[0].venue_ref, "pool1");
     }
@@ -284,7 +313,7 @@ mod tests {
         );
     }
 
-    // ── Account redaction tests ───────────────────────────────────────────────
+    // ?? Account redaction tests ???????????????????????????????????????????????
 
     const ACCOUNT: &str = "GABCD47IF6LWK7P7MDEVSCWR7DPUWV3NY3DTQEVFL4NAT4AQH3ZLLFLA5";
 
@@ -323,7 +352,120 @@ mod tests {
         assert_eq!(first, second);
     }
 
-    // ── Property-based tests ──────────────────────────────────────────────────
+    // ?? Extra issuer / secret fixtures (issue #1305) ?????????????????????????
+
+    /// A second, unrelated issuer - proves redaction is not keyed to one fixture.
+    const OTHER_ISSUER: &str = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";
+
+    #[test]
+    fn alphanum12_asset_code_issuer_is_redacted() {
+        let asset = format!("LONGASSET123:{}", ISSUER);
+        let result = redact_canonical_asset(&asset);
+        assert_eq!(result, format!("LONGASSET123:{}", REDACTED));
+        assert!(!result.contains(ISSUER));
+    }
+
+    #[test]
+    fn issuer_with_extra_colons_is_fully_redacted() {
+        // Only the code survives: everything after the first `:` is the issuer.
+        let asset = format!("USDC:{}:memo", ISSUER);
+        let result = redact_canonical_asset(&asset);
+        assert_eq!(result, format!("USDC:{}", REDACTED));
+        assert!(!result.contains(ISSUER));
+    }
+
+    #[test]
+    fn asset_with_missing_code_still_redacts_issuer() {
+        let asset = format!(":{}", ISSUER);
+        let result = redact_canonical_asset(&asset);
+        assert!(!result.contains(ISSUER), "issuer leaked: {result}");
+    }
+
+    #[test]
+    fn empty_asset_string_is_unchanged() {
+        assert_eq!(redact_canonical_asset(""), "");
+    }
+
+    #[test]
+    fn distinct_issuers_on_base_and_quote_are_both_redacted() {
+        let mut entry = make_entry_with_issuer(ISSUER);
+        entry.inputs.quote = format!("BTC:{}", OTHER_ISSUER);
+        if let Some(selected) = entry.selected.as_mut() {
+            selected.path[0].to = format!("BTC:{}", OTHER_ISSUER);
+        }
+
+        AuditRedactor::redact(&mut entry);
+
+        let json = serde_json::to_string(&entry).expect("serialize");
+        assert!(!json.contains(ISSUER), "base issuer leaked");
+        assert!(!json.contains(OTHER_ISSUER), "quote issuer leaked");
+    }
+
+    #[test]
+    fn native_quote_survives_alongside_a_redacted_base() {
+        let mut entry = make_entry_with_issuer(ISSUER);
+        entry.inputs.quote = "native".to_string();
+        AuditRedactor::redact(&mut entry);
+        assert_eq!(entry.inputs.quote, "native");
+        assert_eq!(entry.inputs.base, format!("USDC:{}", REDACTED));
+    }
+
+    #[test]
+    fn account_boundary_lengths_are_handled() {
+        // 11 chars - below the 12-char guard, so fully replaced.
+        assert_eq!(AuditRedactor::redact_account("GABCDEFGHIJ"), REDACTED);
+        // 12 chars - the shortest input that keeps a prefix/suffix fingerprint.
+        let redacted = AuditRedactor::redact_account("GABCDEFGHIJK");
+        assert!(redacted.starts_with("GABC"));
+        assert!(redacted.contains("..."));
+        assert!(!redacted.contains("GABCDEFGHIJK"));
+    }
+
+    #[test]
+    fn empty_account_is_fully_redacted() {
+        assert_eq!(AuditRedactor::redact_account(""), REDACTED);
+    }
+
+    #[test]
+    fn distinct_accounts_get_distinct_fingerprints() {
+        let a = AuditRedactor::redact_account(ACCOUNT);
+        let b = AuditRedactor::redact_account(OTHER_ISSUER);
+        assert_ne!(a, b, "different accounts must not collide");
+    }
+
+    #[test]
+    fn issuer_is_redacted_when_used_as_an_account() {
+        let redacted = AuditRedactor::redact_account(ISSUER);
+        assert!(!redacted.contains(ISSUER));
+        assert!(redacted.len() < ISSUER.len(), "fingerprint is shorter");
+    }
+
+    #[test]
+    fn cctp_secret_bytes_are_stable_and_distinct() {
+        let a = redact_cctp_secret_bytes("attestation", &[0x01, 0x02, 0x03]);
+        let again = redact_cctp_secret_bytes("attestation", &[0x01, 0x02, 0x03]);
+        let b = redact_cctp_secret_bytes("attestation", &[0x01, 0x02, 0x04]);
+        assert_eq!(a, again, "same bytes must fingerprint identically");
+        assert_ne!(a, b, "different bytes must fingerprint differently");
+    }
+
+    #[test]
+    fn empty_cctp_secret_bytes_are_labelled_not_hashed() {
+        assert_eq!(
+            redact_cctp_secret_bytes("message", &[]),
+            "message:empty".to_string()
+        );
+    }
+
+    #[test]
+    fn cctp_secret_bytes_never_leak_the_hex_payload() {
+        let secret = [0xca, 0xfe, 0xba, 0xbe, 0xde, 0xad, 0xbe, 0xef];
+        let redacted = redact_cctp_secret_bytes("attestation", &secret);
+        assert!(!redacted.contains(&hex::encode(secret)));
+        assert!(!redacted.contains("cafe"));
+    }
+
+    // ?? Property-based tests ??????????????????????????????????????????????????
 
     prop_compose! {
         /// Arbitrary Stellar-like issuer address (56 chars, starts with G).

@@ -284,7 +284,7 @@ impl Pathfinder {
                         bridge: edge.bridge.clone(),
                     };
 
-                    let estimated_after_hop = (estimated_output * 9950) / 10000;
+                    let estimated_after_hop = estimated_output.saturating_mul(9950) / 10000;
 
                     let mut new_hops = path_hops.clone();
                     new_hops.push(hop);
@@ -316,6 +316,8 @@ mod tests {
             liquidity: 100, // Very thin liquidity
             price: 0.1,
             fee_bps: 0,
+            provider: None,
+            bridge: None,
         }]
     }
 
@@ -328,12 +330,16 @@ mod tests {
             liquidity: 10_000_000,
             price: 0.1,
             fee_bps: 0,
+            provider: None,
+            bridge: None,
         }]
     }
 
     #[test]
     fn test_thin_book_no_panic() {
-        let pathfinder = Pathfinder::new(PathfinderConfig::default());
+        let pathfinder = Pathfinder::new(PathfinderConfig {
+            min_liquidity_threshold: 1,
+        });
         let policy = test_policy();
         let edges = thin_book_edges();
 
@@ -385,6 +391,8 @@ mod tests {
                 liquidity: 10_000_000,
                 price: 1.0,
                 fee_bps: 0,
+                provider: None,
+                bridge: None,
             },
             LiquidityEdge {
                 from: "B".to_string(),
@@ -394,6 +402,8 @@ mod tests {
                 liquidity: 10_000_000,
                 price: 1.0,
                 fee_bps: 0,
+                provider: None,
+                bridge: None,
             },
         ];
 
